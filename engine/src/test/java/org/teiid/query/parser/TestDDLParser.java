@@ -131,6 +131,20 @@ public class TestDDLParser {
         helpParse(ddl, "model").getSchema();
     }
 	
+    @Test(expected=MetadataException.class)
+    public void testVirtualTable() throws Exception {
+        String ddl = "CREATE VIEW G1(e4 string)";
+                
+        helpParse(ddl, "model").getSchema();
+    }
+    
+    @Test(expected=MetadataException.class)
+    public void testTableDefinition() throws Exception {
+        String ddl = "CREATE FOREIGN TABLE G1(e4 string); alter view g1 as select 'a';";
+                
+        helpParse(ddl, "model").getSchema();
+    }
+	
     @Test
     public void testDefaultPrecision() throws Exception {
         String ddl = "CREATE FOREIGN TABLE G1(e4 decimal)";
@@ -179,6 +193,17 @@ public class TestDDLParser {
 		parser.parseDDL(mf, ddl);
 		mf.mergeInto(mds);
 	}	
+	
+    @Test 
+    public void testRenameTableQualified() throws Exception {
+        QueryParser parser = new QueryParser();
+        String ddl = "CREATE FOREIGN TABLE G1( e1 integer auto_increment primary key, e2 varchar);"
+                + "ALTER TABLE model.G1 RENAME TO G2";
+        MetadataStore mds = new MetadataStore();
+        MetadataFactory mf = new MetadataFactory("x", 1, "model", getDataTypes(), new Properties(), null); 
+        parser.parseDDL(mf, ddl);
+        mf.mergeInto(mds);
+    }
 	
 	@Test
 	public void testUDT() throws Exception {
@@ -510,6 +535,12 @@ public class TestDDLParser {
 		String ddl = "CREATE FUNCTION SourceFunc() RETURNS string; CREATE FUNCTION SourceFunc(param string) RETURNS string";
 		helpParse(ddl, "model");
 	}
+	
+	@Test(expected=org.teiid.metadata.ParseException.class)
+    public void testFunctionDefault() throws Exception {
+        String ddl = "CREATE FUNCTION SourceFunc(param string default 'a') RETURNS string";
+        helpParse(ddl, "model");
+    }
 
 	@Test
 	public void testUDF() throws Exception {
@@ -1625,6 +1656,23 @@ public class TestDDLParser {
                 + "SET SCHEMA test;"
                 + "CREATE FOREIGN PROCEDURE procG1(P1 integer) RETURNS (e1 integer, e2 varchar);"
                 + "DROP FOREIGN PROCEDURE procG1";
+        
+        Database db = helpParse(ddl);
+        Schema s = db.getSchema("test");
+        Procedure p = s.getProcedure("procG1");
+        assertNull(p);  
+    }
+    
+    @Test(expected=MetadataException.class)
+    public void testDropProcedureWrongType() throws Exception {
+        String ddl = "CREATE DATABASE FOO;"
+                + "USE DATABASE FOO ;"
+                + "CREATE FOREIGN DATA WRAPPER postgresql;"
+                + "CREATE SERVER pgsql TYPE 'custom' FOREIGN DATA WRAPPER postgresql OPTIONS (\"jndi-name\" 'jndiname');"  
+                + "CREATE  SCHEMA test SERVER pgsql;"
+                + "SET SCHEMA test;"
+                + "CREATE FOREIGN PROCEDURE procG1(P1 integer) RETURNS (e1 integer, e2 varchar);"
+                + "DROP VIRTUAL PROCEDURE procG1";
         
         Database db = helpParse(ddl);
         Schema s = db.getSchema("test");

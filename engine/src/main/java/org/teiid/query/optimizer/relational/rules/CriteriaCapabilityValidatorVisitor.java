@@ -221,7 +221,7 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
         } 
     	if (!this.caps.supportsCapability(Capability.WINDOW_FUNCTION_ORDER_BY_AGGREGATES) 
     			&& windowFunction.getWindowSpecification().getOrderBy() != null
-    			&& !windowFunction.getFunction().isAnalytical()) {
+    			&& !(windowFunction.getFunction().isAnalytical() || windowFunction.getFunction().isRanking())) {
     		markInvalid(windowFunction, "Window function order by with aggregate not supported by source"); //$NON-NLS-1$
             return;
     	}
@@ -446,7 +446,7 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
                 return;
             }
             String name = obj.getName();
-            if (CapabilitiesUtil.supports(Capability.ONLY_FORMAT_LITERALS, modelID, metadata, capFinder) && parseFormat.contains(name)) {
+            if (caps.supportsCapability(Capability.ONLY_FORMAT_LITERALS) && parseFormat.contains(name)) {
                 //if the function can be evaluated then return as it will get replaced during the final rewrite 
                 if (willBecomeConstant(obj)) { 
                     return; 
@@ -460,11 +460,35 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
             		markInvalid(obj, obj.getName() + " non-literal parse format function not supported by source"); //$NON-NLS-1$
                     return;
             	}
-            	if (!CapabilitiesUtil.getCapabilities(modelID, metadata, capFinder).supportsFormatLiteral((String)c.getValue(), StringUtil.endsWithIgnoreCase(name, DataTypeManager.DefaultDataTypes.TIMESTAMP)?Format.DATE:Format.NUMBER)) {
+            	if (!caps.supportsFormatLiteral((String)c.getValue(), StringUtil.endsWithIgnoreCase(name, DataTypeManager.DefaultDataTypes.TIMESTAMP)?Format.DATE:Format.NUMBER)) {
             		markInvalid(obj, obj.getName() + " literal parse " + c + " not supported by source"); //$NON-NLS-1$ //$NON-NLS-2$
                     return;
             	}
             	c.setBindEligible(false);
+            }
+            if (name.equalsIgnoreCase(SourceSystemFunctions.TIMESTAMPADD)) {
+                if (caps.supportsCapability(Capability.ONLY_TIMESTAMPADD_LITERAL)) {
+                    //if the function can be evaluated then return as it will get replaced during the final rewrite 
+                    if (willBecomeConstant(obj)) { 
+                        return; 
+                    }
+                    if (!(obj.getArg(1) instanceof Constant)) {
+                        markInvalid(obj, obj.getName() + " non-literal timestampadd not supported by source"); //$NON-NLS-1$
+                        return;
+                    }
+                    Constant c = (Constant)obj.getArg(1);
+                    if (c.isMultiValued()) {
+                        markInvalid(obj, obj.getName() + " non-literal timestampadd function not supported by source"); //$NON-NLS-1$
+                        return;
+                    }
+                    c.setBindEligible(false);
+                }
+                if (obj.getArg(1).getType() == DataTypeManager.DefaultDataClasses.LONG 
+                        && !willBecomeConstant(obj.getArg(1)) 
+                        && !(caps.supportsFunction(SourceSystemFunctions.CONVERT) && caps.supportsConvert(DataTypeManager.DefaultTypeCodes.LONG, DataTypeManager.DefaultTypeCodes.INTEGER))) {
+                    markInvalid(obj, obj.getName() + " cannot narrow long argument timestampadd argument to int"); //$NON-NLS-1$
+                    return;
+                }
             }
         } catch(QueryMetadataException e) {
             handleException(new TeiidComponentException(e));
@@ -949,14 +973,14 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
         visitor.analysisRecord = analysisRecord;
         visitor.isJoin = isJoin;
         visitor.isSelectClause = isSelectClause;
-        //we use an array to represent multiple comparision attributes,
+        //we use an array to represent multiple comparison attributes,
         //but we don't want that to inhibit pushdown as we'll account for that later
         //in criteria processing
         final EvaluatableVisitor ev = new EvaluatableVisitor(modelID, metadata, capFinder);
         PreOrPostOrderNavigator nav = new PreOrPostOrderNavigator(visitor, PreOrPostOrderNavigator.POST_ORDER, false) {
         	@Override
         	public void visit(DependentSetCriteria obj1) {
-        		if (obj1.hasMultipleAttributes()) {
+        		if (obj1.hasMultipleAttributes() && obj1.getExpression() instanceof Array) {
         			Array array = (Array) obj1.getExpression();
         			visitNodes(array.getExpressions());
             		super.postVisitVisitor(obj1);
@@ -972,7 +996,7 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
         		}
         		Determinism d = ev.getDeterminismLevel();
         		boolean pushDown = ev.requiresEvaluation(EvaluationLevel.PUSH_DOWN);
-        		//decend with clean state, then restore
+        		//descend with clean state, then restore
         		ev.reset();
         		super.visitNode(obj);
         		ev.setDeterminismLevel(d);

@@ -19,11 +19,9 @@ package org.teiid.translator.jpa;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Date;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import javax.persistence.EntityManager;
 import javax.persistence.metamodel.Attribute;
@@ -35,6 +33,7 @@ import javax.persistence.metamodel.PluralAttribute;
 import javax.persistence.metamodel.SingularAttribute;
 import javax.persistence.metamodel.Type.PersistenceType;
 
+import org.teiid.core.types.DataTypeManager;
 import org.teiid.language.SQLConstants.Tokens;
 import org.teiid.metadata.Column;
 import org.teiid.metadata.ExtensionMetadataProperty;
@@ -54,25 +53,66 @@ import org.teiid.translator.TypeFacility;
 @SuppressWarnings("nls")
 public class JPAMetadataProcessor implements MetadataProcessor<EntityManager> {
     
-    @ExtensionMetadataProperty(applicable=Column.class, datatype=String.class, display="Foriegn Table Name", description="Applicable on Forign Key columns")
+    @ExtensionMetadataProperty(applicable=Column.class, datatype=String.class, display="Foreign Table Name", description="Applicable on Foreign Key columns")
 	public static final String KEY_ASSOSIATED_WITH_FOREIGN_TABLE = MetadataFactory.JPA_URI+"assosiated_with_table";
+	@ExtensionMetadataProperty(applicable=Column.class, datatype=String.class, display="Relation Property", description="Applicable on Foreign Key columns")
+	public static final String RELATION_PROPERTY = MetadataFactory.JPA_URI+"relation_property";
+	@ExtensionMetadataProperty(applicable=Column.class, datatype=String.class, display="Relation Key", description="Applicable on Foreign Key columns")
+	public static final String RELATION_KEY = MetadataFactory.JPA_URI+"relation_key";
 
     @ExtensionMetadataProperty(applicable=Table.class, datatype=String.class, display="Entity Class", description="Java Entity Class that represents this table", required=true)
 	public static final String ENTITYCLASS= MetadataFactory.JPA_URI+"entity_class";
 	
 	public void process(MetadataFactory mf, EntityManager entityManager) throws TranslatorException {
 		Metamodel model = entityManager.getMetamodel();
-		
-		Set<EntityType<?>> entities = model.getEntities();
+
+		/*
+		 * Hibernate sometimes creates entities which don't have a javaType.
+		 * Envers _aud entities fall into this category. Perhaps something more
+		 * useful could be done with these, but for now filter them out so we
+		 * don't die on NullPointerException later on.
+		 */
+		Metamodel filteredModel = new Metamodel() {
+			@Override
+			public <X> EntityType<X> entity(Class<X> cls) {
+				return model.entity(cls);
+			}
+
+			@Override
+			public <X> ManagedType<X> managedType(Class<X> cls) {
+				return model.managedType(cls);
+			}
+
+			@Override
+			public <X> EmbeddableType<X> embeddable(Class<X> cls) {
+				return model.embeddable(cls);
+			}
+
+			@Override
+			public Set<ManagedType<?>> getManagedTypes() {
+				return model.getManagedTypes().stream()
+						.filter(e -> e.getJavaType() != null)
+						.collect(Collectors.toSet());
+			}
+
+			@Override
+			public Set<EntityType<?>> getEntities() {
+				return model.getEntities().stream()
+						.filter(e -> e.getJavaType() != null)
+						.collect(Collectors.toSet());
+			}
+
+			@Override
+			public Set<EmbeddableType<?>> getEmbeddables() {
+				return model.getEmbeddables();
+			}
+		};
+
+		Set<EntityType<?>> entities = filteredModel.getEntities();
+
 		for (EntityType<?> entity:entities) {
-			addEntity(mf, model, entity);
+			addEntity(mf, filteredModel, entity);
 		}
-		
-		// take a second swipe and add Foreign Keys
-		for (EntityType<?> entity:entities) {
-			Table t = mf.getSchema().getTable(entity.getName());
-			addForeignKeys(mf, model, entity, t);
-		}		
 	}
 
 	private Table addEntity(MetadataFactory mf, Metamodel model, EntityType<?> entity) throws TranslatorException {
@@ -82,7 +122,7 @@ public class JPAMetadataProcessor implements MetadataProcessor<EntityManager> {
 			table.setSupportsUpdate(true);
 			table.setProperty(ENTITYCLASS, entity.getJavaType().getCanonicalName());
 			addPrimaryKey(mf, model, entity, table);
-			addSingularAttributes(mf, model, entity, table);
+			addSingularAttributes(mf, model, entity, table, Collections.EMPTY_LIST);
 		}
 		return table;
 	}
@@ -90,7 +130,7 @@ public class JPAMetadataProcessor implements MetadataProcessor<EntityManager> {
 	private boolean columnExists(String name, Table table) {
 		return table.getColumnByName(name) != null;
 	}
-	
+
 	private Column addColumn(MetadataFactory mf, String name, String type, Table entityTable) throws TranslatorException {
 		if (!columnExists(name, entityTable)) {
 			Column c = mf.addColumn(name, type, entityTable);
@@ -100,8 +140,8 @@ public class JPAMetadataProcessor implements MetadataProcessor<EntityManager> {
 		return entityTable.getColumnByName(name);
 	}
 	
-	private void addForiegnKey(MetadataFactory mf, String name, List<String> columnNames, String referenceTable, Table table) throws TranslatorException {
-		ForeignKey fk = mf.addForiegnKey("FK_"+name, columnNames, referenceTable, table);
+	private void addForeignKey(MetadataFactory mf, String name, List<String> columnNames, String referenceTable, Table table) throws TranslatorException {
+		ForeignKey fk = mf.addForeignKey("FK_"+name, columnNames, referenceTable, table);
 		for (String column:columnNames) {
 			Column c = table.getColumnByName(column);
 			c.setProperty(KEY_ASSOSIATED_WITH_FOREIGN_TABLE, mf.getName()+Tokens.DOT+referenceTable);
@@ -109,23 +149,39 @@ public class JPAMetadataProcessor implements MetadataProcessor<EntityManager> {
 		fk.setNameInSource(name);
 	}
 
-	private void addSingularAttributes(MetadataFactory mf, Metamodel model, ManagedType<?> entity, Table entityTable) throws TranslatorException {
+	private void addSingularAttributes(MetadataFactory mf, Metamodel model,
+			ManagedType<?> entity, Table entityTable, List<String> path)
+			throws TranslatorException {
 		for (Attribute<?, ?> attr:entity.getAttributes()) {
 			if (!attr.isCollection()) {
+				List<String> attrPath = new LinkedList<>(path);
+				attrPath.add(attr.getName());
+
 				boolean simpleType = isSimpleType(attr.getJavaType());
 				if (simpleType) {
-					Column column = addColumn(mf, attr.getName(), TypeFacility.getDataTypeName(getJavaDataType(attr.getJavaType())), entityTable);
+					Column column = addColumn(mf, String.join("_", attrPath),
+							TypeFacility.getDataTypeName(getJavaDataType(attr.getJavaType())), entityTable);
 					if (((SingularAttribute)attr).isOptional()) {
 						column.setDefaultValue(null);
 					}
-				} 
+					column.setNameInSource(String.join(".", attrPath));
+				}
+				else if (attr.getJavaType().isEnum()) {
+					Column column = addColumn(mf, String.join("_", attrPath),
+							DataTypeManager.DefaultDataTypes.STRING, entityTable);
+					if (((SingularAttribute)attr).isOptional()) {
+						column.setDefaultValue(null);
+					}
+					column.setNativeType(attr.getJavaType().getName());
+					column.setNameInSource(String.join(".", attrPath));
+				}
 				else {
 					boolean classFound = false;
 					// If this attribute is a @Embeddable then add its columns as
 					// this tables columns
 					for (EmbeddableType<?> embeddable:model.getEmbeddables()) {
 						if (embeddable.getJavaType().equals(attr.getJavaType())) {
-							addSingularAttributes(mf, model, embeddable, entityTable);
+							addSingularAttributes(mf, model, embeddable, entityTable, attrPath);
 							classFound = true;
 							break;
 						}
@@ -141,11 +197,15 @@ public class JPAMetadataProcessor implements MetadataProcessor<EntityManager> {
 								if (pk != null) { // TODO: entities must have PK, so this check is not needed.
 									ArrayList<String> keys = new ArrayList<String>();
 									for (Column column:pk.getColumns()) {
-										addColumn(mf, column.getName(), column.getDatatype().getRuntimeTypeName(), entityTable);
-										keys.add(column.getName());
+										String fk = attr.getName() + "_" + column.getName();
+										Column c = addColumn(mf, fk, column.getDatatype().getRuntimeTypeName(), entityTable);
+										c.setProperty(RELATION_PROPERTY, attr.getName());
+										c.setProperty(RELATION_KEY, column.getName());
+										c.setNameInSource(column.getNameInSource());
+										keys.add(fk);
 									}
 									if (!foreignKeyExists(keys, entityTable)) {
-										addForiegnKey(mf, attr.getName(), keys, attributeTable.getName(), entityTable);
+										addForeignKey(mf, attr.getName(), keys, attributeTable.getName(), entityTable);
 									}
 								}
 								else {
@@ -164,47 +224,14 @@ public class JPAMetadataProcessor implements MetadataProcessor<EntityManager> {
 			}
 		}
 	}
-	
+
 	private boolean isSimpleType(Class type) {
 		return type.isPrimitive() || type.equals(String.class)
 				|| type.equals(BigDecimal.class) || type.equals(Date.class)
 				|| type.equals(BigInteger.class)
 				|| TypeFacility.getRuntimeType(type) != Object.class;
 	}
-	
-	private void addForeignKeys(MetadataFactory mf, Metamodel model, ManagedType<?> entity, Table entityTable) throws TranslatorException {
-		for (Attribute<?, ?> attr:entity.getAttributes()) {
-			if (attr.isCollection()) {
-				
-				PluralAttribute pa = (PluralAttribute)attr;
-				Table forignTable = null;
-				
-				for (EntityType et:model.getEntities()) {
-					if (et.getJavaType().equals(pa.getElementType().getJavaType())) {
-						forignTable = mf.getSchema().getTable(et.getName());
-						break;
-					}
-				}
-				
-				if (forignTable == null) {
-					continue;
-				}
-				
-				// add foreign keys as columns in table first; check if they exist first
-				ArrayList<String> keys = new ArrayList<String>();
-				KeyRecord pk = entityTable.getPrimaryKey();
-				for (Column entityColumn:pk.getColumns()) {
-					addColumn(mf, entityColumn.getName(), entityColumn.getDatatype().getRuntimeTypeName(), forignTable);
-					keys.add(entityColumn.getName());
-				}
 
-				if (!foreignKeyExists(keys, forignTable)) {
-					addForiegnKey(mf, attr.getName(), keys, entityTable.getName(), forignTable);
-				}
-			}
-		}
-	}
-	
 	private boolean foreignKeyExists(List<String> keys, Table forignTable) {
 		boolean fkExists = false;
 		for (ForeignKey fk:forignTable.getForeignKeys()) {
@@ -243,13 +270,13 @@ public class JPAMetadataProcessor implements MetadataProcessor<EntityManager> {
 				SingularAttribute<?, ?> pkattr = entity.getId(entity.getIdType().getJavaType());
 				for (EmbeddableType<?> embeddable:model.getEmbeddables()) {
 					if (embeddable.getJavaType().equals(pkattr.getJavaType())) {
-						addSingularAttributes(mf, model, embeddable, entityTable);
+						addSingularAttributes(mf, model, embeddable, entityTable, Collections.singletonList(pkattr.getName()));
 						ArrayList<String> keys = new ArrayList<String>();
 						for (Attribute<?, ?> attr:embeddable.getAttributes()) {
-							if (isSimpleType(attr.getJavaType())) {
-								keys.add(attr.getName());
-							}
-							else {
+							if (isSimpleType(attr.getJavaType())
+									|| attr.getJavaType().isEnum()) {
+								keys.add(String.join("_", pkattr.getName(), attr.getName()));
+							} else {
 								throw new TranslatorException(JPAPlugin.Util.gs(JPAPlugin.Event.TEIID14003, entityTable.getName()));
 							}
 						}

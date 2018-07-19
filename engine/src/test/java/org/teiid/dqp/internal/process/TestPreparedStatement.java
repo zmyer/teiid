@@ -56,7 +56,7 @@ public class TestPreparedStatement {
 	
 	private static final int SESSION_ID = 6;
 	
-    static void helpTestProcessing(String preparedSql, List<?> values, List<?>[] expected, ProcessorDataManager dataManager, QueryMetadataInterface metadata, boolean callableStatement, VDBMetaData vdb) throws Exception { 
+    public static void helpTestProcessing(String preparedSql, List<?> values, List<?>[] expected, ProcessorDataManager dataManager, QueryMetadataInterface metadata, boolean callableStatement, VDBMetaData vdb) throws Exception { 
     	helpTestProcessing(preparedSql, values, expected, dataManager, metadata, callableStatement, false, vdb);
     }
 
@@ -149,6 +149,24 @@ public class TestPreparedStatement {
         TestProcessor.sampleData1(dataManager);
 		helpTestProcessing(preparedSql, values, expected, dataManager, RealMetadataFactory.example1Cached(), false, RealMetadataFactory.example1VDB());
 	}
+    
+    @Test public void testCopiedWhere() throws Exception { 
+        String preparedSql = "SELECT mediuma.bigdecimalvalue as a FROM bqt1.smalla inner join  bqt1.mediuma "
+                + "on (smalla.bigdecimalvalue = mediuma.bigdecimalvalue) "
+                + "WHERE smalla.bigdecimalvalue in (?,?) and mediuma.bigdecimalvalue in (1,2)"; //$NON-NLS-1$
+        
+        FakeCapabilitiesFinder capFinder = new FakeCapabilitiesFinder();
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        capFinder.addCapabilities("BQT1", caps); //$NON-NLS-1$
+        QueryMetadataInterface metadata = RealMetadataFactory.exampleBQTCached();
+        
+        List<?> values = Arrays.asList(0, 1);
+
+        PreparedStatementRequest plan = helpGetProcessorPlan(preparedSql, values, capFinder, metadata, new SessionAwareCache<PreparedPlan>("preparedplan", DefaultCacheFactory.INSTANCE, SessionAwareCache.Type.PREPAREDPLAN, 0), SESSION_ID, false, false,RealMetadataFactory.exampleBQTVDB());
+        TestOptimizer.checkNodeTypes(plan.processPlan, TestOptimizer.FULL_PUSHDOWN);
+        
+        TestOptimizer.checkAtomicQueries(new String[] {"SELECT g_1.BigDecimalValue FROM BQT1.SmallA AS g_0, BQT1.MediumA AS g_1 WHERE (g_0.BigDecimalValue = g_1.BigDecimalValue) AND (g_0.BigDecimalValue IN (?, ?)) AND (g_0.BigDecimalValue IN (1, 2)) AND (g_1.BigDecimalValue IN (1, 2)) AND (g_1.BigDecimalValue IN (?, ?))"}, plan.processPlan);
+    }
     
     @Test public void testObjectCast() throws Exception { 
         // Create query 
@@ -512,4 +530,58 @@ public class TestPreparedStatement {
 		helpTestProcessing(preparedSql, values, expected, dataManager, new DefaultCapabilitiesFinder(caps), metadata, null, false, false, false, RealMetadataFactory.example1VDB());
     }
     
+    @Test public void testBranchPruningPrepared() throws Exception {
+        String preparedSql = "select * from (select 'a' as branch, e1 from pm1.g1 union all select 'b', pm1.g2.e1 as branch from pm1.g2, pm1.g1) as x where branch = ?"; //$NON-NLS-1$
+        
+        List<?> values = Arrays.asList("a"); //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] { 
+            Arrays.asList("a", "b"),
+        };    
+        
+        QueryMetadataInterface metadata = RealMetadataFactory.example1Cached();
+        HardcodedDataManager dataManager = new HardcodedDataManager(metadata);
+        dataManager.addData("SELECT g_0.e1 FROM g1 AS g_0", new List<?>[] {Arrays.asList("b")});
+        CapabilitiesFinder caps = TestOptimizer.getGenericFinder(false);
+        
+        helpTestProcessing(preparedSql, values, expected, dataManager, caps, metadata, null, false, false, false, RealMetadataFactory.example1VDB());
+    }
+    
+    @Test public void testParallelIn() throws Exception {
+        String preparedSql = "select e1 from pm1.g1 where pm1.g1.e2 in (?,?,?,?,?,?,?,?)"; //$NON-NLS-1$
+        
+        List<?> values = Arrays.asList(1,2,3,4,5,6,7,8); //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] { 
+            Arrays.asList("a"),
+            Arrays.asList("b"),
+        };    
+        
+        QueryMetadataInterface metadata = RealMetadataFactory.example1Cached();
+        HardcodedDataManager dataManager = new HardcodedDataManager(metadata);
+        int maxInSize = 4;
+        dataManager.getLanguageBridgeFactory().setMaxInPredicateSize(maxInSize); //normally set in the connectorworkitem
+        dataManager.addData("SELECT g_0.e1 FROM g1 AS g_0 WHERE g_0.e2 IN (1, 2, 3, 4) OR g_0.e2 IN (5, 6, 7, 8)", new List<?>[] {Arrays.asList("a"), Arrays.asList("b")});
+        BasicSourceCapabilities bsc = TestOptimizer.getTypicalCapabilities();
+        bsc.setSourceProperty(Capability.MAX_IN_CRITERIA_SIZE, maxInSize);
+        DefaultCapabilitiesFinder capFinder = new DefaultCapabilitiesFinder(bsc);
+        
+        helpTestProcessing(preparedSql, values, expected, dataManager, capFinder, metadata, null, false, false, false, RealMetadataFactory.example1VDB());
+        
+        dataManager.clearData();
+        //should cause two parallel queries
+        bsc.setSourceProperty(Capability.MAX_DEPENDENT_PREDICATES, 1);
+        dataManager.addData("SELECT g_0.e1 FROM g1 AS g_0 WHERE g_0.e2 IN (1, 2, 3, 4)", new List<?>[] {Arrays.asList("a")});
+        dataManager.addData("SELECT g_0.e1 FROM g1 AS g_0 WHERE g_0.e2 IN (5, 6, 7, 8)", new List<?>[] {Arrays.asList("b")});
+        helpTestProcessing(preparedSql, values, expected, dataManager, capFinder, metadata, null, false, false, false, RealMetadataFactory.example1VDB());
+        
+        dataManager.clearData();
+        preparedSql = "select e1 from pm1.g1 where pm1.g1.e2 in (1,2,3,4,5,6,7,8) and e1 < ?"; //$NON-NLS-1$
+        values = Arrays.asList("c"); //$NON-NLS-1$
+        dataManager.addData("SELECT g_0.e1 FROM g1 AS g_0 WHERE g_0.e1 < 'c' AND g_0.e2 IN (1, 2, 3, 4)", new List<?>[] {Arrays.asList("a")});
+        dataManager.addData("SELECT g_0.e1 FROM g1 AS g_0 WHERE g_0.e1 < 'c' AND g_0.e2 IN (5, 6, 7, 8)", new List<?>[] {Arrays.asList("b")});
+        helpTestProcessing(preparedSql, values, expected, dataManager, capFinder, metadata, null, false, false, false, RealMetadataFactory.example1VDB());
+    }
+    
 }
+

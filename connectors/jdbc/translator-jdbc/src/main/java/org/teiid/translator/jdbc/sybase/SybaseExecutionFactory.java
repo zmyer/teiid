@@ -142,7 +142,6 @@ public class SybaseExecutionFactory extends BaseSybaseExecutionFactory {
     
     public void start() throws TranslatorException {
         super.start();
-        
         registerFunctionModifier(SourceSystemFunctions.MOD, new ModFunctionModifier("%", getLanguageFactory())); //$NON-NLS-1$
         if (nullPlusNonNullIsNull()) {
         	registerFunctionModifier(SourceSystemFunctions.CONCAT, new AliasModifier("+")); //$NON-NLS-1$
@@ -224,8 +223,28 @@ public class SybaseExecutionFactory extends BaseSybaseExecutionFactory {
     	convertModifier.addTypeMapping("double precision", FunctionModifier.DOUBLE); //$NON-NLS-1$
     	convertModifier.addTypeMapping("numeric(38, 0)", FunctionModifier.BIGINTEGER); //$NON-NLS-1$
     	convertModifier.addTypeMapping("numeric(38, 19)", FunctionModifier.BIGDECIMAL); //$NON-NLS-1$
-    	convertModifier.addTypeMapping("char(1)", FunctionModifier.CHAR); //$NON-NLS-1$
-    	convertModifier.addTypeMapping("varchar(4000)", FunctionModifier.STRING); //$NON-NLS-1$
+    	convertModifier.addTypeConversion(new FunctionModifier() {
+            @Override
+            public List<?> translate(Function function) {
+                if (isNonAscii(function.getParameters().get(0))) {
+                    ((Literal)function.getParameters().get(1)).setValue("nchar(1)"); //$NON-NLS-1$
+                } else {
+                    ((Literal)function.getParameters().get(1)).setValue("char(1)"); //$NON-NLS-1$
+                }
+                return null;
+            }
+        }, FunctionModifier.CHAR);
+    	convertModifier.addTypeConversion(new FunctionModifier() {
+            @Override
+            public List<?> translate(Function function) {
+                if (isNonAscii(function.getParameters().get(0))) {
+                    ((Literal)function.getParameters().get(1)).setValue("nvarchar(4000)"); //$NON-NLS-1$
+                } else {
+                    ((Literal)function.getParameters().get(1)).setValue("varchar(4000)"); //$NON-NLS-1$
+                }
+                return null;
+            }
+        }, FunctionModifier.STRING);
     	convertModifier.addConvert(FunctionModifier.TIMESTAMP, FunctionModifier.DATE, new FunctionModifier() {
 			@Override
 			public List<?> translate(Function function) {
@@ -300,11 +319,14 @@ public class SybaseExecutionFactory extends BaseSybaseExecutionFactory {
     
     //TODO: this looses the milliseconds
 	protected List<?> convertTimestampToString(Function function) {
-		LinkedList<Object> result = new LinkedList<Object>();
-		result.addAll(convertDateToString(function));
-		result.add('+');
-		result.addAll(convertTimeToString(function));
-		return result;
+	    if (getVersion().compareTo(FIFTEEN_5) >= 0) {
+	        return Arrays.asList("stuff(convert(varchar, ", function.getParameters().get(0), ", 23), 11, 1, ' ')"); //$NON-NLS-1$ //$NON-NLS-2$
+	    }
+	    LinkedList<Object> result = new LinkedList<Object>();
+        result.addAll(convertDateToString(function));
+        result.add("+' '+"); //$NON-NLS-1$
+        result.addAll(convertTimeToString(function));
+        return result;
 	}
     
     @Override

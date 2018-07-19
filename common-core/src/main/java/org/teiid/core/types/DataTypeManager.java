@@ -55,12 +55,12 @@ import org.teiid.core.util.PropertiesUtils;
 public class DataTypeManager {
 	
 	static final String ARRAY_SUFFIX = "[]"; //$NON-NLS-1$
-	public static final boolean USE_VALUE_CACHE = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.useValueCache", false); //$NON-NLS-1$
-	private static final boolean COMPARABLE_LOBS = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.comparableLobs", false); //$NON-NLS-1$
-	private static final boolean COMPARABLE_OBJECT = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.comparableObject", false); //$NON-NLS-1$
-	public static final boolean PAD_SPACE = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.padSpace", false); //$NON-NLS-1$
+	public static final boolean USE_VALUE_CACHE = PropertiesUtils.getHierarchicalProperty("org.teiid.useValueCache", false, Boolean.class); //$NON-NLS-1$
+	private static final boolean COMPARABLE_LOBS = PropertiesUtils.getHierarchicalProperty("org.teiid.comparableLobs", false, Boolean.class); //$NON-NLS-1$
+	private static final boolean COMPARABLE_OBJECT = PropertiesUtils.getHierarchicalProperty("org.teiid.comparableObject", false, Boolean.class); //$NON-NLS-1$
+	public static final boolean PAD_SPACE = PropertiesUtils.getHierarchicalProperty("org.teiid.padSpace", false, Boolean.class); //$NON-NLS-1$
 	public static final String DEFAULT_COLLATION = "UCS-2"; //$NON-NLS-1$
-	public static final String COLLATION_LOCALE = System.getProperties().getProperty("org.teiid.collationLocale"); //$NON-NLS-1$
+	public static final String COLLATION_LOCALE = PropertiesUtils.getHierarchicalProperty("org.teiid.collationLocale", null); //$NON-NLS-1$
 	
 	private static boolean valueCacheEnabled = USE_VALUE_CACHE;
 	
@@ -151,7 +151,7 @@ public class DataTypeManager {
 		}
 	};
 
-	public static final int MAX_STRING_LENGTH = PropertiesUtils.getIntProperty(System.getProperties(), "org.teiid.maxStringLength", 4000); //$NON-NLS-1$
+	public static final int MAX_STRING_LENGTH = PropertiesUtils.getHierarchicalProperty("org.teiid.maxStringLength", 4000, Integer.class); //$NON-NLS-1$
 	public static final int MAX_VARBINARY_BYTES = Math.max(nextPowOf2(2*MAX_STRING_LENGTH), 1<<13);
 	public static final int MAX_LOB_MEMORY_BYTES = Math.max(nextPowOf2(8*MAX_STRING_LENGTH), 1<<15);
 	
@@ -980,18 +980,29 @@ public class DataTypeManager {
     }
     
 	public static boolean isHashable(Class<?> type) {
-		if (type == DataTypeManager.DefaultDataClasses.STRING
-				|| type == DataTypeManager.DefaultDataClasses.CHAR) {
-			return COLLATION_LOCALE == null;
-		}
-		if (type == DataTypeManager.DefaultDataClasses.STRING) {
-			return 	!PAD_SPACE; 
-		}
-		return !(type == DataTypeManager.DefaultDataClasses.BIG_DECIMAL
-				|| type == DataTypeManager.DefaultDataClasses.BLOB
-				|| type == DataTypeManager.DefaultDataClasses.CLOB
-				|| type == DataTypeManager.DefaultDataClasses.OBJECT);
+		return isHashable(type, PAD_SPACE, COLLATION_LOCALE);
 	}
+    
+	static boolean isHashable(Class<?> type, boolean padSpace, String collationLocale) {
+	    if (type == null) {
+	        return true;
+	    }
+	    if ((type == DataTypeManager.DefaultDataClasses.STRING
+                || type == DataTypeManager.DefaultDataClasses.CHAR) && collationLocale != null) {
+            return false;
+        }
+        if (type == DataTypeManager.DefaultDataClasses.STRING) {
+            return !padSpace; 
+        }
+        if (type.isArray() ) {
+            return isHashable(type.getComponentType(), padSpace, collationLocale);
+        }
+        return !(type == DataTypeManager.DefaultDataClasses.BIG_DECIMAL
+                || type == DataTypeManager.DefaultDataClasses.BLOB
+                || type == DataTypeManager.DefaultDataClasses.CLOB
+                || type == DataTypeManager.DefaultDataClasses.OBJECT);
+    }
+    
 
 	public static Class<?> getArrayType(Class<?> classType) {
 		Class<?> result = arrayTypes.get(classType);

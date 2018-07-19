@@ -39,7 +39,9 @@ public class Table extends ColumnSet<Schema> implements Modifiable, DataModifiab
 		Table,
 		View,
 		Document,
+		@Deprecated
 		XmlMappingClass,
+		@Deprecated
 		XmlStagingTable,
 		MaterializedTable,
 		/** Temporary from a Teiid Perspective - physical will not have a parent set */
@@ -80,7 +82,7 @@ public class Table extends ColumnSet<Schema> implements Modifiable, DataModifiab
     private boolean isSystem;
     private boolean isMaterialized;
     private boolean supportsUpdate;
-    private List<ForeignKey> foriegnKeys = new ArrayList<ForeignKey>(2);
+    private List<ForeignKey> foreignKeys = new ArrayList<ForeignKey>(2);
     private List<KeyRecord> indexes = new ArrayList<KeyRecord>(2);
     private List<KeyRecord> functionBasedIndexes = new ArrayList<KeyRecord>(2);
     private List<KeyRecord> uniqueKeys = new ArrayList<KeyRecord>(2);
@@ -113,10 +115,12 @@ public class Table extends ColumnSet<Schema> implements Modifiable, DataModifiab
 	 * Used in xml document models mapping classes to represent input parameters
 	 * @return
 	 */
+	@Deprecated
     public List<String> getBindings() {
 		return bindings;
 	}
 
+	@Deprecated
 	public void setBindings(List<String> bindings) {
 		this.bindings = bindings;
 	}
@@ -249,11 +253,16 @@ public class Table extends ColumnSet<Schema> implements Modifiable, DataModifiab
 	}
     
     public List<ForeignKey> getForeignKeys() {
-    	return this.foriegnKeys;
+    	return this.foreignKeys;
     }
     
+    public void setForeignKeys(List<ForeignKey> foreignKeys) {
+        this.foreignKeys = foreignKeys;
+    }
+    
+    @Deprecated
     public void setForiegnKeys(List<ForeignKey> foriegnKeys) {
-		this.foriegnKeys = foriegnKeys;
+		this.foreignKeys = foriegnKeys;
 	}
     
     public List<KeyRecord> getIndexes() {

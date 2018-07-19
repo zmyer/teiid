@@ -80,7 +80,7 @@ public class BufferManagerImpl implements BufferManager, ReplicatedObject<String
 	private static final int SYSTEM_OVERHEAD_MEGS = 150;
 
 	/**
-	 * Asynch cleaner attempts to age out old entries and to reduce the memory size when 
+	 * Async cleaner attempts to age out old entries and to reduce the memory size when 
 	 * little is reserved.
 	 */
 	private static final int MAX_READ_AGE = 1<<19;
@@ -106,12 +106,12 @@ public class BufferManagerImpl implements BufferManager, ReplicatedObject<String
 				    checkForOrphanedMemoryEntries(impl);
 	                long evicted = impl.doEvictions(impl.maxProcessingBytes, true, impl.initialEvictionQueue);
 					if (evicted != 0 && LogManager.isMessageToBeRecorded(LogConstants.CTX_BUFFER_MGR, MessageLevel.TRACE)) {
-						LogManager.logTrace(LogConstants.CTX_BUFFER_MGR, "Asynch eviction run", evicted, impl.reserveBatchBytes.get(), impl.maxReserveBytes, impl.activeBatchBytes.get()); //$NON-NLS-1$
+						LogManager.logTrace(LogConstants.CTX_BUFFER_MGR, "Async eviction run", evicted, impl.reserveBatchBytes.get(), impl.maxReserveBytes, impl.activeBatchBytes.get()); //$NON-NLS-1$
 					}
 					if (evicted < impl.maxProcessingBytes) {
     					long secondEvicted = impl.doEvictions(impl.maxProcessingBytes/2, true, impl.evictionQueue);
                         if (secondEvicted != 0 && LogManager.isMessageToBeRecorded(LogConstants.CTX_BUFFER_MGR, MessageLevel.TRACE)) {
-                            LogManager.logTrace(LogConstants.CTX_BUFFER_MGR, "Asynch eviction run", secondEvicted, impl.reserveBatchBytes.get(), impl.maxReserveBytes, impl.activeBatchBytes.get()); //$NON-NLS-1$
+                            LogManager.logTrace(LogConstants.CTX_BUFFER_MGR, "Async eviction run", secondEvicted, impl.reserveBatchBytes.get(), impl.maxReserveBytes, impl.activeBatchBytes.get()); //$NON-NLS-1$
                         }
 					}
 				} catch (Throwable t) {
@@ -126,7 +126,9 @@ public class BufferManagerImpl implements BufferManager, ReplicatedObject<String
 				synchronized (this) {
 					impl.cleaning.set(false);
 					try {
-						this.wait(100);
+					    //wait for a while before cleanning more
+					    //we'll be woken up by a processing thread if needed
+					    this.wait(5000);
 					} catch (InterruptedException e) {
 						break;
 					}
@@ -1133,7 +1135,7 @@ public class BufferManagerImpl implements BufferManager, ReplicatedObject<String
 		    long result = activeBatchBytes.addAndGet(-ce.getSizeEstimate());
             assert result >= 0 || !LrfuEvictionQueue.isSuspectSize(activeBatchBytes);
 		}
-		assert activeBatchBytes.get() >= 0;
+		assert !LrfuEvictionQueue.isSuspectSize(activeBatchBytes);
 		Serializer<?> s = ce.getSerializer();
 		if (s != null) {
 			removeFromCache(s.getId(), ce.getId());
@@ -1431,6 +1433,11 @@ public class BufferManagerImpl implements BufferManager, ReplicatedObject<String
 	public void setMaxSessionBatchManagerSizeEstimate(
             long maxSessionBatchManagerSizeEstimate) {
         this.maxSessionBatchManagerSizeEstimate = maxSessionBatchManagerSizeEstimate;
+    }
+	
+	public void setMaxBatchManagerSizeEstimate(
+            long maxBatchManagerSizeEstimate) {
+        this.maxBatchManagerSizeEstimate = maxBatchManagerSizeEstimate;
     }
 
 }

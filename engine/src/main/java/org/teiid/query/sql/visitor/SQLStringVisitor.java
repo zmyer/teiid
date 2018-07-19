@@ -39,6 +39,7 @@ import org.teiid.language.SQLConstants.Tokens;
 import org.teiid.metadata.BaseColumn.NullType;
 import org.teiid.metadata.Column;
 import org.teiid.query.metadata.DDLStringVisitor;
+import org.teiid.query.metadata.TempMetadataID;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.LanguageVisitor;
 import org.teiid.query.sql.lang.*;
@@ -70,7 +71,6 @@ public class SQLStringVisitor extends LanguageVisitor {
 		private DDLVisitor() {
 			super(null, null);
 			this.usePrefixes = false;
-			this.createNS = false;
 		}
 
 		@Override
@@ -1358,7 +1358,11 @@ public class SQLStringVisitor extends LanguageVisitor {
     	if (obj.getGroup() == null) {
     		append(Tokens.ALL_COLS);
     	} else {
-    		visitNode(obj.getGroup());
+    	    if (isSinglePart(obj.getGroup())) {
+    	        append(escapeSinglePart(obj.getGroup().getOutputName()));
+    	    } else {
+    	        visitNode(obj.getGroup());
+    	    }
     		append(Tokens.DOT);
     		append(Tokens.ALL_COLS);
     	}
@@ -1476,10 +1480,30 @@ public class SQLStringVisitor extends LanguageVisitor {
             return;
         }
         String name = obj.getOutputName();
+        //always use full qualification to avoid stripping quotes when an alias with a . is used
+        //we can detect this easily with getDefinition != null, but to avoid overlap with existing
+        //logic, such as procedure relational naming, we need to only affect non-scalar temp metadata 
+        GroupSymbol groupSymbol = obj.getGroupSymbol();
+        if (name.contains(ElementSymbol.SEPARATOR) 
+                && groupSymbol != null 
+                && isSinglePart(groupSymbol)
+                && groupSymbol.getOutputName().contains(ElementSymbol.SEPARATOR)) {
+            append(escapeSinglePart(groupSymbol.getOutputName()));
+            append(ElementSymbol.SEPARATOR);
+            outputShortName(obj);
+            return;
+        }
         if (obj.getDisplayMode().equals(ElementSymbol.DisplayMode.FULLY_QUALIFIED)) {
             name = obj.getName();
         }
         outputDisplayName(name);
+    }
+
+    private boolean isSinglePart(GroupSymbol groupSymbol) {
+        return (groupSymbol.getDefinition() != null || (!groupSymbol.isProcedure()
+                && groupSymbol.getMetadataID() instanceof TempMetadataID
+                && ((TempMetadataID) groupSymbol.getMetadataID())
+                        .getMetadataType() != TempMetadataID.Type.SCALAR));
     }
 
     private void outputShortName( ElementSymbol obj ) {
@@ -1487,12 +1511,33 @@ public class SQLStringVisitor extends LanguageVisitor {
     }
 
     private void outputDisplayName( String name ) {
-        String[] pathParts = name.split("\\."); //$NON-NLS-1$
-        for (int i = 0; i < pathParts.length; i++) {
-            if (i > 0) {
-                append(Symbol.SEPARATOR);
+        int start = 0;
+        int end = 0;
+        while (true) {
+            end = name.indexOf(Symbol.SEPARATOR, end);
+            if (end == -1) {
+                append(escapeSinglePart(name.substring(start, name.length())));
+                return;
             }
-            append(escapeSinglePart(pathParts[i]));
+            
+            while (end < name.length() - 1 && name.charAt(end + 1) == '.') {
+                end++;
+            }
+            
+            if (start != end) {
+                if (end == name.length() -1) {
+                    end++;
+                }
+                append(escapeSinglePart(name.substring(start, end)));
+                if (end == name.length()) {
+                    return;
+                }
+                end++;
+                start = end;
+                append(Symbol.SEPARATOR);
+            } else {
+                end++;
+            }
         }
     }
 
@@ -1579,9 +1624,11 @@ public class SQLStringVisitor extends LanguageVisitor {
             append(")"); //$NON-NLS-1$
         } else {
             append(name);
-            append("("); //$NON-NLS-1$
-            registerNodes(args, 0);
-            append(")"); //$NON-NLS-1$
+            if ((args != null && args.length > 0) || (!name.equalsIgnoreCase(Reserved.CURRENT_TIME) && !name.equalsIgnoreCase(Reserved.CURRENT_TIMESTAMP))) {
+                append("("); //$NON-NLS-1$
+                registerNodes(args, 0);
+                append(")"); //$NON-NLS-1$
+            }
         }
     }
 
@@ -2156,11 +2203,15 @@ public class SQLStringVisitor extends LanguageVisitor {
             append(SPACE);
             append(NonReserved.TRIM);
         }
+        endTableFunction(obj);
+    }
+
+    private void endTableFunction(TableFunctionReference obj) {
         append(")");//$NON-NLS-1$
         append(SPACE);
         append(AS);
         append(SPACE);
-        outputDisplayName(obj.getName());
+        append(escapeSinglePart(obj.getName()));
     }
 
     @Override
@@ -2211,11 +2262,7 @@ public class SQLStringVisitor extends LanguageVisitor {
                 }
             }
         }
-        append(")");//$NON-NLS-1$
-        append(SPACE);
-        append(AS);
-        append(SPACE);
-        outputDisplayName(obj.getName());
+        endTableFunction(obj);
     }
 
     @Override
@@ -2255,11 +2302,7 @@ public class SQLStringVisitor extends LanguageVisitor {
                 append(","); //$NON-NLS-1$
             }
         }
-        append(")");//$NON-NLS-1$
-        append(SPACE);
-        append(AS);
-        append(SPACE);
-        outputDisplayName(obj.getName());
+        endTableFunction(obj);
     }
     
     @Override
@@ -2443,28 +2486,8 @@ public class SQLStringVisitor extends LanguageVisitor {
                 append(","); //$NON-NLS-1$
             }
         }
-        
-        append(")");//$NON-NLS-1$
-        append(SPACE);
-        append(AS);
-        append(SPACE);
-        outputDisplayName(obj.getName());
+        endTableFunction(obj);
     }
-    
-    private void addMakeDep(FromClause obj) {
-		MakeDep makeDep = obj.getMakeDep();
-		if (makeDep != null && !makeDep.isSimple()) {
-			append(SPACE);
-			append(MAKEDEP);
-			appendMakeDepOptions(makeDep);
-		}
-		makeDep = obj.getMakeInd();
-		if (makeDep != null && !makeDep.isSimple()) {
-			append(SPACE);
-			append(MAKEIND);
-			appendMakeDepOptions(makeDep);
-		}
-	}
     
 	@Override
     public void visit(AlterProcedure alterProcedure) {

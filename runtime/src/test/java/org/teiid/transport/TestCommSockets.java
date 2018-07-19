@@ -43,7 +43,6 @@ import org.teiid.common.buffer.impl.MemoryStorageManager;
 import org.teiid.core.crypto.NullCryptor;
 import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.UnitTestUtil;
-import org.teiid.dqp.service.SessionServiceException;
 import org.teiid.net.CommunicationException;
 import org.teiid.net.ConnectionException;
 import org.teiid.net.ServerConnection;
@@ -51,7 +50,6 @@ import org.teiid.net.TeiidURL;
 import org.teiid.net.socket.SocketServerConnection;
 import org.teiid.net.socket.SocketServerConnectionFactory;
 import org.teiid.net.socket.SocketUtil;
-import org.teiid.net.socket.UrlServerDiscovery;
 import org.teiid.services.SessionServiceImpl;
 import org.teiid.transport.TestSocketRemoting.FakeService;
 
@@ -87,7 +85,6 @@ public class TestCommSockets {
 
 	@Test public void testConnectWithoutPooling() throws Exception {
 		Properties p = new Properties();
-		p.setProperty("org.teiid.sockets.maxCachedInstances", String.valueOf(0)); //$NON-NLS-1$
 		SocketServerConnection conn = helpEstablishConnection(false, new SSLConfiguration(), p);
 		SocketListenerStats stats = listener.getStats();
 		assertEquals(2, stats.objectsRead); // handshake response, logon,
@@ -105,24 +102,6 @@ public class TestCommSockets {
 		assertEquals(0, stats.sockets);
 	}
 	
-	@Test public void testConnectWithPooling() throws Exception {
-		SocketServerConnection conn = helpEstablishConnection(false);
-		SocketListenerStats stats = listener.getStats();
-		assertEquals(2, stats.objectsRead); // handshake response, logon
-		assertEquals(1, stats.sockets);
-		conn.close();
-		stats = listener.getStats();
-		assertEquals(1, stats.maxSockets);
-		assertEquals(3, stats.objectsRead); // handshake response, logon, logoff
-		stats = listener.getStats();
-		assertEquals(1, stats.sockets);
-		conn = helpEstablishConnection(false);
-		conn.close();
-		stats = listener.getStats();
-		assertEquals(1, stats.sockets);
-		assertEquals(1, stats.maxSockets);
-	}
-
 	@Test public void testLobs() throws Exception {
 		SocketServerConnection conn = helpEstablishConnection(false);
 		FakeService fs = conn.getService(FakeService.class);
@@ -182,7 +161,6 @@ public class TestCommSockets {
 		String url = new TeiidURL(addr.getHostName(), listener.getPort(), clientSecure).getAppServerURL();
 		p.setProperty(TeiidURL.CONNECTION.SERVER_URL, url); 
 		p.setProperty(TeiidURL.CONNECTION.APP_NAME, "test");
-		p.setProperty(TeiidURL.CONNECTION.DISCOVERY_STRATEGY, UrlServerDiscovery.class.getName());
 		if (sscf == null) {
 			sscf = new SocketServerConnectionFactory();
 			sscf.initialize(socketConfig);
@@ -297,25 +275,11 @@ public class TestCommSockets {
 	
 	@Test public void testSelectNewInstanceWithoutPooling() throws Exception {
 		Properties p = new Properties();
-		p.setProperty("org.teiid.sockets.maxCachedInstances", "0");
-		helpTestNewInstance(p);
-	}
-	
-	@Test public void testSelectNewInstanceWithPooling() throws Exception {
-		Properties p = new Properties();
-		p.setProperty("org.teiid.sockets.maxCachedInstances", "16");
-		helpTestNewInstance(p);
-	}
-
-	private void helpTestNewInstance(Properties p)
-			throws CommunicationException, ConnectionException,
-			SessionServiceException {
 		SSLConfiguration config = new SSLConfiguration();
 		SocketServerConnection conn = helpEstablishConnection(false, config, p);
 		SocketListenerStats stats = listener.getStats();
 		assertEquals(2, stats.objectsRead); // handshake response, logon,
 		assertEquals(1, stats.sockets);
-		conn.cleanUp();
 		assertEquals(1, this.service.getActiveSessionsCount());
 		ServerConnection conn2 = helpEstablishConnection(false, config, p);
 		assertEquals(2, this.service.getActiveSessionsCount());
@@ -323,7 +287,7 @@ public class TestCommSockets {
 		assertEquals(2, this.service.getActiveSessionsCount());
 		assertTrue(conn.isOpen(10000));
 		stats = listener.getStats();
-		assertEquals(8, stats.objectsRead); // (ping (pool test), assert identityx2, ping (isOpen))x2
+		assertEquals(5, stats.objectsRead); // (ping (pool test), assert identityx2, ping (isOpen))x2
 		assertEquals(2, stats.sockets);
 		conn.close();
 		conn2.close();

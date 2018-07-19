@@ -302,6 +302,25 @@ public class TestWindowFunctions {
         helpProcess(plan, dataManager, expected);
     }
     
+    @Test public void testPartitionedRowNumber1() throws Exception {
+        String sql = "select e1, e3, row_number() over (partition by e3 order by e1) as r from pm1.g1 order by r, e1";
+        
+        List<?>[] expected = new List[] {
+                Arrays.asList(null, Boolean.FALSE, 1),
+                Arrays.asList("a", Boolean.TRUE, 1),
+                Arrays.asList("a", Boolean.FALSE, 2),
+                Arrays.asList("c", Boolean.TRUE, 2),
+                Arrays.asList("a", Boolean.FALSE, 3),
+                Arrays.asList("b", Boolean.FALSE, 4),
+        };
+        
+        FakeDataManager dataManager = new FakeDataManager();
+        sampleData1(dataManager);
+        ProcessorPlan plan = helpGetPlan(sql, RealMetadataFactory.example1Cached(), TestOptimizer.getGenericFinder());
+        
+        helpProcess(plan, dataManager, expected);
+    }
+    
     @Test public void testPartitionedDistinctCount() throws Exception {
     	String sql = "select e1, e3, count(distinct e1) over (partition by e3) as r from pm1.g1 order by e1, e3";
         
@@ -475,7 +494,7 @@ public class TestWindowFunctions {
         
         String sql = "SELECT y.LEAD(ALL convert(amount, string)) OVER (PARTITION BY team ORDER BY \"year\") FROM team_target";
         
-        TestOptimizer.getPlan(helpGetCommand(sql, metadata, null), 
+        TestOptimizer.getPlan(helpGetCommand(sql, metadata), 
                 metadata, new DefaultCapabilitiesFinder(bsc), 
                 null, false, new CommandContext()); //$NON-NLS-1$
     }
@@ -485,7 +504,7 @@ public class TestWindowFunctions {
         
         String sql = "SELECT FIRST_VALUE(e1) over (order by e2), LAST_VALUE(e2) over (order by e1) from pm1.g1";
         
-        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached(), null), 
+        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached()), 
                 RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
                 null, true, new CommandContext()); //$NON-NLS-1$
         
@@ -510,7 +529,7 @@ public class TestWindowFunctions {
         
         String sql = "SELECT FIRST_VALUE(e1) over (order by e2), LAST_VALUE(e1) over (order by e2) from pm1.g1";
         
-        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached(), null), 
+        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached()), 
                 RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
                 null, true, new CommandContext()); //$NON-NLS-1$
         
@@ -531,7 +550,7 @@ public class TestWindowFunctions {
         
         String sql = "SELECT LEAD(e1) over (order by e2), LEAD(e1, 2, 'c') over (order by e2) from pm1.g1";
         
-        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached(), null), 
+        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached()), 
                 RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
                 null, true, new CommandContext()); //$NON-NLS-1$
         
@@ -556,7 +575,7 @@ public class TestWindowFunctions {
         
         String sql = "SELECT LEAD(e1, 1, 'default') over (order by e2) from pm1.g1";
         
-        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached(), null), 
+        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached()), 
                 RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
                 null, true, new CommandContext()); //$NON-NLS-1$
         
@@ -574,9 +593,9 @@ public class TestWindowFunctions {
     @Test public void testLag() throws Exception {
         BasicSourceCapabilities bsc = TestOptimizer.getTypicalCapabilities();
         
-        String sql = "SELECT e1, LAG(e1, 2, 'd') over (partition by e3 order by e2) from pm1.g1";
+        String sql = "SELECT e1, e3, e2, LAG(e1, 2, 'd') over (partition by e3 order by e2) from pm1.g1";
         
-        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached(), null), 
+        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.example1Cached()), 
                 RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
                 null, true, new CommandContext()); //$NON-NLS-1$
         
@@ -586,12 +605,12 @@ public class TestWindowFunctions {
                 Arrays.asList("a", false, 1), Arrays.asList("b", false, 2), Arrays.asList("c", false, 0));
         
         List<?>[] expected = new List<?>[] {
-                Arrays.asList("a", "d"),
-                Arrays.asList("b", "d"),
-                Arrays.asList("c", "a"),
-                Arrays.asList("a", "d"),
-                Arrays.asList("b", "d"),
-                Arrays.asList("c", "a"),
+            Arrays.asList("a", true, 1, "d"),
+            Arrays.asList("b", true, 2, "c"),
+            Arrays.asList("c", true, 0, "d"),
+            Arrays.asList("a", false, 1, "d"),
+            Arrays.asList("b", false, 2, "c"),
+            Arrays.asList("c", false, 0, "d"),
         }; 
         
         helpProcess(plan, dataMgr, expected);
@@ -599,7 +618,87 @@ public class TestWindowFunctions {
         bsc.setCapabilitySupport(Capability.ELEMENTARY_OLAP, true);
         bsc.setCapabilitySupport(Capability.QUERY_AGGREGATES, true);
 
-        TestOptimizer.helpPlan(sql, RealMetadataFactory.example1Cached(), new String[] {"SELECT g_0.e1, LAG(g_0.e1, 2, 'd') OVER (PARTITION BY g_0.e3 ORDER BY g_0.e2) FROM pm1.g1 AS g_0"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING);
+        TestOptimizer.helpPlan(sql, RealMetadataFactory.example1Cached(), new String[] {"SELECT g_0.e1, g_0.e3, g_0.e2, LAG(g_0.e1, 2, 'd') OVER (PARTITION BY g_0.e3 ORDER BY g_0.e2) FROM pm1.g1 AS g_0"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING);
+    }
+    
+    @Test public void testSimpleLead() throws Exception {
+        BasicSourceCapabilities bsc = TestOptimizer.getTypicalCapabilities();
+        
+        String sql = "select stringkey, lead(stringkey) over (order by stringkey) l from bqt1.smalla order by l";
+        
+        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.exampleBQTCached()), 
+                RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
+                null, true, new CommandContext()); //$NON-NLS-1$
+        
+        HardcodedDataManager dataMgr = new HardcodedDataManager();
+        dataMgr.addData("SELECT g_0.StringKey FROM BQT1.SmallA AS g_0", 
+                Arrays.asList("b"), Arrays.asList("a"), Arrays.asList("c"), Arrays.asList("d"));
+        
+        List<?>[] expected = new List<?>[] {
+                Arrays.asList("d", null),
+                Arrays.asList("a", "b"),
+                Arrays.asList("b", "c"),
+                Arrays.asList("c", "d"),
+        }; 
+        
+        helpProcess(plan, dataMgr, expected);
+    }
+    
+    @Test public void testInsertWithView() throws Exception {
+        String sql = "insert into bqt1.smalla (intkey)\n" + 
+                "select rang \n" + 
+                "from (\n" + 
+                "    select row_number() over(partition by intnum order by intkey) as rang\n" + 
+                "    from bqt1.smallb csr\n" + 
+                ") v"; 
+        
+        BasicSourceCapabilities bsc = TestOptimizer.getTypicalCapabilities();
+        
+        ProcessorPlan plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.exampleBQTCached()), 
+                RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
+                null, true, new CommandContext()); //$NON-NLS-1$
+        
+        HardcodedDataManager dataMgr = new HardcodedDataManager();
+        dataMgr.addData("SELECT g_0.IntNum, g_0.IntKey FROM BQT1.SmallB AS g_0", 
+                Arrays.asList(1, 1), Arrays.asList(1, 2), Arrays.asList(2, 3), Arrays.asList(2, 4));
+        dataMgr.addData("INSERT INTO bqt1.smalla (intkey) VALUES (1)", Arrays.asList(1));
+        dataMgr.addData("INSERT INTO bqt1.smalla (intkey) VALUES (2)", Arrays.asList(1));
+        
+        List<?>[] expected = new List<?>[] {
+                Arrays.asList(4),
+        }; 
+        
+        helpProcess(plan, dataMgr, expected);
+        
+        sql = "insert into bqt1.smalla (intkey)\n" + 
+                "select rang \n" + 
+                "from (\n" + 
+                "    select row_number() over(partition by intnum order by intkey) as rang\n" + 
+                "    from bqt1.smallb csr\n" + 
+                ") v group by rang";
+
+        plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.exampleBQTCached()), 
+                RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
+                null, true, new CommandContext()); //$NON-NLS-1$
+        
+        expected = new List<?>[] {
+            Arrays.asList(2),
+        }; 
+        
+        helpProcess(plan, dataMgr, expected);
+        
+        sql = "insert into bqt1.smalla (intkey)\n" + 
+                "select distinct rang \n" + 
+                "from (\n" + 
+                "    select row_number() over(partition by intnum order by intkey) as rang\n" + 
+                "    from bqt1.smallb csr\n" + 
+                ") v"; 
+        
+        plan = TestOptimizer.getPlan(helpGetCommand(sql, RealMetadataFactory.exampleBQTCached()), 
+                RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), 
+                null, true, new CommandContext()); //$NON-NLS-1$
+        
+        helpProcess(plan, dataMgr, expected);
     }
     
 }

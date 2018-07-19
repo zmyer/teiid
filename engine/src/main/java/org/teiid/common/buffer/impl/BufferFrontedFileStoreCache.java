@@ -279,11 +279,11 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 			if (inodeBuffer == null) {
 				if (inode == EMPTY_ADDRESS) {
 					this.inode = inodesInuse.getAndSetNextClearBit();
-					if (this.inode == -1) {
+					if (this.inode == EMPTY_ADDRESS) {
 						throw new AssertionError("Out of inodes"); //$NON-NLS-1$
 					}
 					if (LogManager.isMessageToBeRecorded(LogConstants.CTX_BUFFER_MGR, MessageLevel.DETAIL)) {
-						LogManager.logDetail(LogConstants.CTX_BUFFER_MGR, "Allocating inode", this.inode, "to", gid, oid); //$NON-NLS-1$ //$NON-NLS-2$
+						LogManager.logDetail(LogConstants.CTX_BUFFER_MGR, "Allocating inode", this.inode, "to", gid, oid, "; total inodes", getInodesInUse()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 					}
 					ByteBuffer bb = getInodeBlock();
 					bb.putInt(EMPTY_ADDRESS);
@@ -378,7 +378,7 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 	private AtomicBoolean defragRunning = new AtomicBoolean();
 	private AtomicInteger freedCounter = new AtomicInteger();
 	
-	private boolean compactBufferFiles = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.compactBufferFiles", false); //$NON-NLS-1$
+	private boolean compactBufferFiles = PropertiesUtils.getHierarchicalProperty("org.teiid.compactBufferFiles", false, Boolean.class); //$NON-NLS-1$
 	
 	private int truncateInterval = 4;
 	//defrag to release freespace held by storage files
@@ -557,13 +557,10 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 	
 	@Override
 	public void initialize() throws TeiidComponentException {
-		initialize(true);
-	}
-	
-	void initialize(boolean allocateMemory) throws TeiidComponentException {
 		storageManager.initialize();
 		memoryBufferSpace = Math.max(memoryBufferSpace, maxStorageObjectSize);
 		blocks = (int) Math.min(Integer.MAX_VALUE, (memoryBufferSpace>>LOG_BLOCK_SIZE)*ADDRESSES_PER_BLOCK/(ADDRESSES_PER_BLOCK+1));
+		LogManager.logDetail(LogConstants.CTX_BUFFER_MGR, blocks, "max blocks"); //$NON-NLS-1$
 		inodesInuse = new ConcurrentBitSet(blocks+1, BufferManagerImpl.CONCURRENCY_LEVEL);
 		blocksInuse = new ConcurrentBitSet(blocks, BufferManagerImpl.CONCURRENCY_LEVEL);
 		this.blockByteBuffer = new BlockByteBuffer(30, blocks, LOG_BLOCK_SIZE, direct);
@@ -641,15 +638,18 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 			if (!newEntry) {
 				synchronized (info) {
 					if (info.adding) {
+					    info = null; //clear the info to prevent finally block actions
 						return false; //someone else is responsible for adding this cache entry
 					}
-					if (info.evicting || info.inode != EMPTY_ADDRESS
-							|| !shouldPlaceInMemoryBuffer(0, info)) {
+					if (!shouldPlaceInMemoryBuffer(info)) {
+					    info = null; //clear the info to prevent finally block actions
 						return true; //safe to remove from tier 1 
 					}
 					info.adding = true;
 					//second chance re-add to the cache, we assume that serialization would be faster than a disk read
-					memoryBlocks = info.memoryBlockCount;
+					if (info.memoryBlockCount != 0) {
+					    memoryBlocks = info.memoryBlockCount;
+					}
 				}
 			}
 			checkForLowMemory();
@@ -666,12 +666,20 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
             synchronized (map) {
             	if (physicalMapping.containsKey(s.getId()) && map.containsKey(entry.getId())) {
         			synchronized (info) {
+        			    //sanity check
+        				if (info.inode != EMPTY_ADDRESS) {
+            			    throw new AssertionError("The object already has an inode failing this add attempt"); //$NON-NLS-1$
+            			}
         				//set the size first, since it may raise an exceptional condition
             			info.setSize(bos.getBytesWritten());
             			info.inode = blockManager.getInode();
         				memoryBufferEntries.add(info);
 					}
             		success = true;
+            	} else {
+            	    if (LogManager.isMessageToBeRecorded(LogConstants.CTX_BUFFER_MGR, MessageLevel.DETAIL)) {
+                        LogManager.logDetail(LogConstants.CTX_BUFFER_MGR, "removed during add", s.getId(), entry.getId()); //$NON-NLS-1$
+                    }
             	}
 			}
 		} catch (Throwable e) {
@@ -691,8 +699,13 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
                 } catch (IOException e1) {
                     
                 }
-				LogManager.logError(LogConstants.CTX_BUFFER_MGR, 
-				        QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30001,s.getId(), entry.getId(), entry.getSizeEstimate(), size[0], s.describe(entry.getObject()))); 
+			    if (!newEntry && memoryBlocks < maxMemoryBlocks) {
+			        //entries are mutable after adding, the original should be removed shortly so just ignore
+	                LogManager.logDetail(LogConstants.CTX_BUFFER_MGR, "Object ", entry.getId(), " changed size since first persistence, keeping the original."); //$NON-NLS-1$ //$NON-NLS-2$
+			    } else {
+			        LogManager.logError(LogConstants.CTX_BUFFER_MGR, 
+				        QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30001, entry.getId(), s.getId(), entry.getSizeEstimate(), size[0], s.describe(entry.getObject())));
+			    }
 			} else {
 				LogManager.logError(LogConstants.CTX_BUFFER_MGR, e, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30002,s.getId(), entry.getId()));
 			}
@@ -874,17 +887,22 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 
 	/**
 	 * Determine if an object should be in the memory buffer.
-	 * Adds are indicated by a current time of 0.
 	 * @param currentTime
 	 * @param info
 	 * @return
 	 */
-	private boolean shouldPlaceInMemoryBuffer(long currentTime, PhysicalInfo info) {
+	private boolean shouldPlaceInMemoryBuffer(PhysicalInfo info) {
+	    if (info.evicting || info.inode != EMPTY_ADDRESS) {
+	        return false;
+	    }
+	    if (info.block == EMPTY_ADDRESS) {
+	        return true;
+	    }
 		PhysicalInfo lowest = memoryBufferEntries.firstEntry(false);
 		CacheKey key = info.getKey();
 		return (blocksInuse.getTotalBits() - blocksInuse.getBitsSet()) > (cleaningThreshold + info.memoryBlockCount)
 				|| (lowest != null && lowest.block != EMPTY_ADDRESS 
-						&& lowest.getKey().getOrderingValue() < (currentTime>0?memoryBufferEntries.computeNextOrderingValue(currentTime, key.getLastAccess(), key.getOrderingValue()):key.getOrderingValue()));
+						&& lowest.getKey().getOrderingValue() < key.getOrderingValue());
 	}
 	
 	@Override
@@ -902,7 +920,9 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 		if (map == null) {
 			return false;
 		}
-		map.put(oid, null);
+		if (map.put(oid, null) != null) {
+		    throw new AssertionError("already added"); //$NON-NLS-1$
+		}
 		return true;
 	}
 	

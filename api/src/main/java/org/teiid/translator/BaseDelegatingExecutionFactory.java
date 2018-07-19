@@ -21,6 +21,7 @@ package org.teiid.translator;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.StringTokenizer;
+import java.util.regex.Pattern;
 
 import org.teiid.language.Argument;
 import org.teiid.language.Call;
@@ -599,7 +600,7 @@ public class BaseDelegatingExecutionFactory<F, C> extends ExecutionFactory<F, C>
 	}
 	
 	Boolean supportsOrderByNullOrdering;
-	@TranslatorProperty(display="Supports ORDER BY w/Null [FIRST|LAST]", advanced=true)
+	@TranslatorProperty(display="Supports ORDER BY col NULLS [FIRST|LAST|HIGH|LOW]", advanced=true)
 	@Override
 	public boolean supportsOrderByNullOrdering() {
 		if (supportsOrderByNullOrdering != null) {
@@ -1040,6 +1041,12 @@ public class BaseDelegatingExecutionFactory<F, C> extends ExecutionFactory<F, C>
 	public CacheDirective getCacheDirective(Command command,
 			ExecutionContext executionContext, RuntimeMetadata metadata)
 			throws TranslatorException {
+	    if (cachePattern != null && cachePattern.matcher(command.toString()).matches()) {
+	        //return a new cache directive with defaults and ttl set
+	        CacheDirective cacheDirective = new CacheDirective();
+	        cacheDirective.setTtl(cacheTtl);
+	        return cacheDirective;
+	    }
 		return delegate.getCacheDirective(command, executionContext, metadata);
 	}
 	
@@ -1448,5 +1455,56 @@ public class BaseDelegatingExecutionFactory<F, C> extends ExecutionFactory<F, C>
     }
     public void setSupportsIsDistinctCriteria(boolean value) {
         supportsIsDistinctCriteria = value;
+    }
+    
+    Boolean supportsOnlyLateralJoinProcedure;
+    @TranslatorProperty(display="Supports Only Lateral Join Procedure", advanced=true)
+    @Override
+    public boolean supportsOnlyLateralJoinProcedure() {
+        if (supportsOnlyLateralJoinProcedure != null) {
+            return supportsOnlyLateralJoinProcedure;
+        }
+        return delegate.supportsOnlyLateralJoinProcedure();
+    }
+    public void setSupportsOnlyLateralJoinProcedure(
+            boolean supportsOnlyLateralJoinProcedure) {
+        this.supportsOnlyLateralJoinProcedure = supportsOnlyLateralJoinProcedure;
+    }
+    
+    Boolean supportsOnlyTimestampAddLiteral;
+    @TranslatorProperty(display="Supports Only TimestampAdd literal", advanced=true)
+    @Override
+    public boolean supportsOnlyTimestampAddLiteral() {
+        if (supportsOnlyTimestampAddLiteral != null) {
+            return supportsOnlyTimestampAddLiteral;
+        }
+        return delegate.supportsOnlyTimestampAddLiteral();
+    }
+    public void setSupportsOnlyTimestampAddLiteral(
+            boolean supportsOnlyTimestampAddLiteral) {
+        this.supportsOnlyTimestampAddLiteral = supportsOnlyTimestampAddLiteral;
+    }
+    
+    private Pattern cachePattern;
+    @TranslatorProperty(display="Cache Pattern", advanced=true)
+    public String getCachePattern() {
+        if (this.cachePattern != null) {
+            return this.cachePattern.pattern();
+        }
+        return null;
+    }
+    
+    public void setCachePattern(String cachePattern) {
+        this.cachePattern = Pattern.compile(cachePattern);
+    }
+    
+    Long cacheTtl;
+    @TranslatorProperty(display="Cache TTL", advanced=true)
+    public Long getCacheTtl() {
+        return cacheTtl;
+    }
+    
+    public void setCacheTtl(Long ttl) {
+        this.cacheTtl = ttl;
     }
 }

@@ -47,6 +47,7 @@ import org.teiid.translator.TranslatorException;
 import org.teiid.translator.TranslatorProperty;
 import org.teiid.translator.TranslatorProperty.PropertyType;
 import org.teiid.translator.TypeFacility;
+import org.teiid.util.FullyQualifiedName;
 
 
 /**
@@ -56,6 +57,9 @@ public class JDBCMetadataProcessor implements MetadataProcessor<Connection>{
     
     @ExtensionMetadataProperty(applicable= {FunctionMethod.class}, datatype=String.class, display="Sequence Used By This Function")
     static final String SEQUENCE = AbstractMetadataRecord.RELATIONAL_URI+"sequence"; //$NON-NLS-1$
+    
+    @ExtensionMetadataProperty(applicable= {Table.class, Procedure.class}, datatype=String.class, display="type of object")
+    static final String TYPE = SOURCE_PREFIX+"type"; //$NON-NLS-1$
 	
 	/**
 	 * A holder for table records that keeps track of catalog and schema information.
@@ -237,6 +241,7 @@ public class JDBCMetadataProcessor implements MetadataProcessor<Connection>{
 					procedureName = nameInSource;
 				}
 			}
+			nameInSource = modifyProcedureNameInSource(nameInSource);
 			String fullProcedureName = getFullyQualifiedName(procedureCatalog, procedureSchema, procedureName);
 			if ((excludeProcedures != null && excludeProcedures.matcher(fullProcedureName).matches()) || isHiddenSchema(procedureCatalog, procedureSchema)) {
 				continue;
@@ -312,7 +317,16 @@ public class JDBCMetadataProcessor implements MetadataProcessor<Connection>{
 		procedures.close();
 	}
 
-	private int checkForUnsigned(int sqlType, String typeName) {
+	/**
+	 * Override to modify the nameInSource for a procedure
+	 * @param nameInSource
+	 * @return
+	 */
+	protected String modifyProcedureNameInSource(String nameInSource) {
+        return nameInSource;
+    }
+
+    private int checkForUnsigned(int sqlType, String typeName) {
 		if (widenUnsingedTypes && unsignedTypes.contains(typeName)) {
 			switch (sqlType) {
 			case Types.TINYINT:
@@ -350,6 +364,7 @@ public class JDBCMetadataProcessor implements MetadataProcessor<Connection>{
 			}
 			TableInfo ti = new TableInfo(tableCatalog, tableSchema, tableName, table);
 			ti.type = tables.getString(4);
+			table.setProperty(TYPE, ti.type); //$NON-NLS-1$
 			tableMap.put(fullName, ti);
 			tableMap.put(tableName, ti);
 		}
@@ -373,6 +388,18 @@ public class JDBCMetadataProcessor implements MetadataProcessor<Connection>{
 		return addTable(metadataFactory, tableCatalog, tableSchema, tableName,
 				remarks, fullName);
 	}
+	
+	protected String getCatalogTerm() {
+	    return "catalog"; //$NON-NLS-1$
+	}
+	
+	protected String getSchemaTerm() {
+	    return "schema"; //$NON-NLS-1$
+	}
+	
+	protected String getTableTerm() {
+	    return "table"; //$NON-NLS-1$
+	}
 
 	/**
 	 * 
@@ -389,6 +416,16 @@ public class JDBCMetadataProcessor implements MetadataProcessor<Connection>{
 			String remarks, String fullName) {
 		Table table = metadataFactory.addTable(useFullSchemaName?fullName:tableName);
 		table.setNameInSource(getFullyQualifiedName(tableCatalog, tableSchema, tableName, true));
+		//create a fqn for the table
+		FullyQualifiedName fqn = new FullyQualifiedName();
+		if (tableCatalog != null && !tableCatalog.isEmpty()) {
+		    fqn.append(getCatalogTerm(), tableCatalog);
+		}
+		if (tableSchema != null && !tableSchema.isEmpty()) {
+		    fqn.append(getSchemaTerm(), tableSchema);
+		}
+		fqn.append(getTableTerm(), tableName); 
+		table.setProperty(FQN, fqn.toString());
 		table.setSupportsUpdate(true);
 		table.setAnnotation(remarks);
 		return table;
@@ -663,7 +700,7 @@ public class JDBCMetadataProcessor implements MetadataProcessor<Connection>{
 				}
 				
 				KeyRecord record = autoCreateUniqueKeys(autoCreateUniqueConstraints, metadataFactory, entry.getKey(), info.referencedKeyColumns, info.pkTable.table);
-				ForeignKey fk = metadataFactory.addForiegnKey(entry.getKey(), new ArrayList<String>(info.keyColumns.values()), new ArrayList<String>(info.referencedKeyColumns.values()), info.pkTable.table.getName(), tableInfo.table);
+				ForeignKey fk = metadataFactory.addForeignKey(entry.getKey(), new ArrayList<String>(info.keyColumns.values()), new ArrayList<String>(info.referencedKeyColumns.values()), info.pkTable.table.getName(), tableInfo.table);
 				if (record != null) {
 					fk.setReferenceKey(record);
 				}

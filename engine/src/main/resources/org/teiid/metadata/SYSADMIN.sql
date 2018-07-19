@@ -68,7 +68,7 @@ CREATE FOREIGN TABLE StoredProcedures (
 CREATE FOREIGN PROCEDURE isLoggable(OUT loggable boolean NOT NULL RESULT, IN level string NOT NULL DEFAULT 'DEBUG', IN context string NOT NULL DEFAULT 'org.teiid.PROCESSOR')
 OPTIONS (UPDATECOUNT 0);
 
-CREATE FOREIGN PROCEDURE logMsg(OUT logged boolean NOT NULL RESULT, IN level string NOT NULL DEFAULT 'DEBUG', IN context string NOT NULL DEFAULT 'org.teiid.PROCESSOR', IN msg object NOT NULL)
+CREATE FOREIGN PROCEDURE logMsg(OUT logged boolean NOT NULL RESULT, IN level string NOT NULL DEFAULT 'DEBUG', IN context string NOT NULL DEFAULT 'org.teiid.PROCESSOR', IN msg object)
 OPTIONS (UPDATECOUNT 0);
 
 CREATE FOREIGN PROCEDURE refreshMatView(OUT RowsUpdated integer NOT NULL RESULT, IN ViewName string NOT NULL, IN Invalidate boolean NOT NULL DEFAULT 'false')
@@ -143,7 +143,7 @@ BEGIN
 END;
 
 
-CREATE VIRTUAL PROCEDURE loadMatView(IN schemaName string NOT NULL, IN viewName string NOT NULL, IN invalidate boolean NOT NULL DEFAULT 'false') RETURNS integer
+CREATE VIRTUAL PROCEDURE loadMatView(IN schemaName string NOT NULL, IN viewName string NOT NULL, IN invalidate boolean NOT NULL DEFAULT 'false', IN only_if_needed boolean NOT NULL DEFAULT false) RETURNS integer
 AS
 BEGIN
 	DECLARE string vdbName = (SELECT Name FROM VirtualDatabases);
@@ -189,12 +189,12 @@ BEGIN
 	DECLARE string matViewTable = array_get(targets, 1);
 	DECLARE string targetSchemaName = array_get(targets, 2);
 
-    EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Materialization of view ' || VARIABLES.fullViewName || ' started.');        
+    EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Materialization of view ' || VARIABLES.fullViewName || ' started' || case when only_if_needed then ' if needed.' else '.' end);        
     
     IF (targetSchemaName IS NULL)
     BEGIN        
         rowsUpdated = (EXECUTE SYSADMIN.refreshMatView(VARIABLES.fullViewName, loadMatView.invalidate));
-        EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Materialization of view ' || VARIABLES.fullViewName || ' completed. Rows updated = ' || VARIABLES.rowsUpdated);        
+        EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Materialization of view ' || VARIABLES.fullViewName || ' completed. Rows updated = ' || VARIABLES.rowsUpdated);        
         RETURN rowsUpdated;
     EXCEPTION e
         rowsUpdated = -2;
@@ -233,7 +233,7 @@ BEGIN
         VARIABLES.status = 'LOAD';
     EXCEPTION e
         DELETE FROM #load;
-        EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
+        EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
         EXECUTE IMMEDIATE 'SELECT Name, TargetSchemaName, TargetName, Valid, LoadState, Updated, Cardinality, LoadNumber, StaleCount FROM ' || VARIABLES.statusTable || VARIABLES.updateCriteria AS Name string, TargetSchemaName string, TargetName string, Valid boolean, LoadState string, Updated timestamp, Cardinality long, LoadNumber long, StaleCount long INTO #load USING vdbName = VARIABLES.vdbName, vdbVersion = VARIABLES.vdbVersion, schemaName = schemaName, viewName = loadMatView.viewName;		       
     END
     
@@ -245,7 +245,20 @@ BEGIN
 	BEGIN 
 	    LOOP ON (SELECT valid, updated, loadstate, cardinality, loadnumber FROM #load) AS matcursor
 	    BEGIN
-		    IF (loadstate <> 'LOADING' OR TIMESTAMPDIFF(SQL_TSI_SECOND, matcursor.updated, now()) > (ttl/1000))
+		    DECLARE boolean VARIABLES.load = false;
+	        IF ((loadstate <> 'LOADING' AND NOT only_if_needed) OR (only_if_needed AND loadstate IN ('NEEDS_LOADING', 'FAILED_LOAD')) OR TIMESTAMPDIFF(SQL_TSI_FRAC_SECOND, matcursor.updated, now())/1000000 > ttl)
+		        load = true;
+		    ELSE
+		        BEGIN
+		            DECLARE string pollingQuery = (SELECT "value" from SYS.Properties WHERE UID = VARIABLES.uid AND Name = '{http://www.teiid.org/ext/relational/2012}MATVIEW_POLLING_QUERY');
+		            IF (pollingQuery IS NOT NULL)
+		                BEGIN
+		                    EXECUTE IMMEDIATE pollingQuery AS updateTimestamp timestamp INTO #poll;
+		                    IF (matcursor.updated < (SELECT updateTimestamp from #poll))
+		                        load = true;
+		                END
+		        END
+		    IF (load)
 		        BEGIN 
 		            EXECUTE IMMEDIATE updateStmt || ' AND loadNumber = ' || matcursor.loadNumber USING loadNumber = matcursor.loadNumber + 1, vdbName = VARIABLES.vdbName, vdbVersion = VARIABLES.vdbVersion, schemaName = schemaName, viewName = loadMatView.viewName, updated = now(), LoadState = 'LOADING', valid = matcursor.valid AND NOT invalidate, cardinality = matcursor.cardinality, NodeName = NODE_ID(), StaleCount = VARIABLES.staleCount;
 					DECLARE integer updated = VARIABLES.ROWCOUNT;
@@ -316,12 +329,12 @@ BEGIN
         
         EXECUTE IMMEDIATE updateStmt || ' AND loadNumber = DVARS.loadNumber' USING  loadNumber = VARIABLES.loadNumber, vdbName = VARIABLES.vdbName, vdbVersion = VARIABLES.vdbVersion, schemaName = schemaName, viewName = loadMatView.viewName, updated = now(), LoadState = 'LOADED', valid = true, cardinality = VARIABLES.rowsUpdated, NodeName = NODE_ID(), StaleCount = 0;	
         VARIABLES.status = 'DONE';
-        EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Materialization of view ' || VARIABLES.fullViewName || ' completed. Rows updated = ' || VARIABLES.rowsUpdated || ' Load Number = ' || VARIABLES.loadNumber);
+        EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Materialization of view ' || VARIABLES.fullViewName || ' completed. Rows updated = ' || VARIABLES.rowsUpdated || ' Load Number = ' || VARIABLES.loadNumber);
     EXCEPTION e 
         EXECUTE IMMEDIATE updateStmt || ' AND loadNumber = DVARS.loadNumber' USING  loadNumber = VARIABLES.loadNumber, vdbName = VARIABLES.vdbName, vdbVersion = VARIABLES.vdbVersion, schemaName = schemaName, viewName = loadMatView.viewName, updated = now(), LoadState = 'FAILED_LOAD', valid = VARIABLES.valid AND NOT invalidate, cardinality = -1, NodeName = NODE_ID(), StaleCount = VARIABLES.staleCount;
         VARIABLES.status = 'FAILED';
         VARIABLES.rowsUpdated = -3;
-        EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
+        EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
     END
 
 	RETURN  rowsUpdated;
@@ -367,7 +380,7 @@ BEGIN
         vdbVersion = '0';
     END
     	
-    EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Criteria based Update of Materialization of view ' || VARIABLES.fullViewName || ' started.');
+    EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Criteria based Update of Materialization of view ' || VARIABLES.fullViewName || ' started.');
 	
 	DECLARE string statusTable = (SELECT "value" from SYS.Properties WHERE UID = VARIABLES.uid AND Name = '{http://www.teiid.org/ext/relational/2012}MATVIEW_STATUS_TABLE');
 	DECLARE string[] targets = (SELECT (TargetName, TargetSchemaName) from SYSADMIN.MatViews WHERE VDBName = VARIABLES.vdbName AND SchemaName = updateMatView.schemaName AND Name = updateMatView.viewName);
@@ -407,10 +420,10 @@ BEGIN
                     rowsUpdated = interrowUpdated;
                 END
             END
-            EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Criteria based Update of Materialization of view ' || updateMatView.schemaName || '.' || updateMatView.viewName || ' is completed.'); 	       
+            EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Criteria based Update of Materialization of view ' || updateMatView.schemaName || '.' || updateMatView.viewName || ' is completed.'); 	       
         EXCEPTION e
            VARIABLES.rowsUpdated = -3;
-           EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
+           EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
         END  
         RETURN rowsUpdated;
     END
@@ -429,9 +442,9 @@ BEGIN
 
     /* make sure table in valid state before updating */    
     EXECUTE IMMEDIATE 'SELECT Name, TargetSchemaName, TargetName, Valid, LoadState, Updated, Cardinality, LoadNumber FROM ' || VARIABLES.statusTable || VARIABLES.updateCriteria AS Name string, TargetSchemaName string, TargetName string, Valid boolean, LoadState string, Updated timestamp, Cardinality long, LoadNumber long INTO #load USING vdbName = VARIABLES.vdbName, vdbVersion = VARIABLES.vdbVersion, schemaName = updateMatView.schemaName, viewName = updateMatView.viewName;
-    DECLARE long loadNumber = (SELECT LoadNumber FROM #load);
-    DECLARE long updatedCardinality = (SELECT Cardinality FROM #load);
-    DECLARE boolean valid = (SELECT Valid FROM #load);
+    DECLARE long loadNumber = nvl((SELECT LoadNumber FROM #load), 0);
+    DECLARE long updatedCardinality = nvl((SELECT Cardinality FROM #load), 0);
+    DECLARE boolean valid = nvl((SELECT Valid FROM #load), false);
     IF (NOT VARIABLES.valid)
     BEGIN
         RAISE SQLEXCEPTION 'View ' || VARIABLES.fullViewName || ' contents are not in valid status to perform materialization update. Run loadMatview to reload.';
@@ -464,10 +477,10 @@ BEGIN
         
         VARIABLES.loadNumber = VARIABLES.loadNumber +1;        
         EXECUTE IMMEDIATE updateStmtWithCardinality USING vdbName = VARIABLES.vdbName, vdbVersion = VARIABLES.vdbVersion, schemaName = updateMatView.schemaName, viewName = updateMatView.viewName, updated = now(), LoadState = 'LOADED', valid = true, cardinality = VARIABLES.updatedCardinality, loadNumber = VARIABLES.loadNumber, NodeName = NODE_ID();
-        EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Criteria based Update of Materialization of view ' || VARIABLES.fullViewName || ' is completed. Rows updated = ' || VARIABLES.rowsUpdated || ' Load Number = ' || VARIABLES.loadNumber);                			
+        EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'INFO', msg=>'Criteria based Update of Materialization of view ' || VARIABLES.fullViewName || ' is completed. Rows updated = ' || VARIABLES.rowsUpdated || ' Load Number = ' || VARIABLES.loadNumber);                			
     EXCEPTION e 
         VARIABLES.rowsUpdated = -3;
-        EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
+        EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
     END    
 	RETURN  rowsUpdated;
 END
@@ -516,7 +529,7 @@ BEGIN
     DECLARE string selectCriteria = ' WHERE VDBName = DVARS.vdbName AND VDBVersion = DVARS.vdbVersion AND schemaName = DVARS.schemaName AND Name = DVARS.viewName';
     DECLARE string updateStmt = 'UPDATE ' || VARIABLES.statusTable || ' SET StaleCount=StaleCount+1, LoadState = DVARS.LoadState ' || VARIABLES.selectCriteria;
 
-    EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'DEBUG', msg=>'Materialization of view ' || VARIABLES.fullViewName || ', updating the stale count.');        
+    EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'DEBUG', msg=>'Materialization of view ' || VARIABLES.fullViewName || ', updating the stale count.');        
 
     EXECUTE IMMEDIATE 'SELECT Name, LoadState, StaleCount, Cardinality FROM ' || VARIABLES.statusTable || VARIABLES.selectCriteria AS Name string, LoadState string, StaleCount long, Cardinality long  INTO #load USING vdbName = VARIABLES.vdbName, vdbVersion = VARIABLES.vdbVersion, schemaName = updateStaleCount.schemaName, viewName = updateStaleCount.viewName;
     
@@ -530,6 +543,6 @@ BEGIN
             VARIABLES.loadState = 'NEEDS_LOADING';
         EXECUTE IMMEDIATE updateStmt USING vdbName = VARIABLES.vdbName, vdbVersion = VARIABLES.vdbVersion, schemaName = updateStaleCount.schemaName, viewName = updateStaleCount.viewName, LoadState = VARIABLES.loadState;
     EXCEPTION e
-        EXECUTE logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
+        EXECUTE sysadmin.logMsg(context=>'org.teiid.MATVIEWS', level=>'WARN', msg=>e.exception);
     END
 END

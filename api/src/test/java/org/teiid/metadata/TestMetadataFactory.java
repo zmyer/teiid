@@ -102,6 +102,23 @@ public class TestMetadataFactory {
         Table x2 = factory.addTable("X");
         assertEquals("X_2", x2.getName());
     }
+    
+    @Test public void testDuplicateProcedure() {
+        ModelMetaData mmd = new ModelMetaData();
+        mmd.setName("foo");
+        mmd.addProperty("importer.renameAllDuplicates", "true");
+        HashMap<String, Datatype> types = new HashMap<String, Datatype>();
+        Datatype value = new Datatype();
+        value.setName("string");
+        types.put("string", value);
+        MetadataFactory factory = new MetadataFactory("x", 1, types, mmd);
+        Procedure x = factory.addProcedure("x");
+        assertEquals("x", x.getName());
+        Procedure x1 = factory.addProcedure("X");
+        assertEquals("X_1", x1.getName());
+        Procedure x2 = factory.addProcedure("X");
+        assertEquals("X_2", x2.getName());
+    }
 	
 	public static boolean someFunction() {
 		return true;
@@ -126,5 +143,18 @@ public class TestMetadataFactory {
 			
 		}
 	}
+	
+	@Test public void testNameFormat() {
+        ModelMetaData mmd = new ModelMetaData();
+        mmd.setName("foo");
+        mmd.addProperty("importer.nameFormat", "x_%s_y");
+        HashMap<String, Datatype> types = new HashMap<String, Datatype>();
+        MetadataFactory factory = new MetadataFactory("x", 1, types, mmd);
+        Table x = factory.addTable("x");
+        assertEquals("x_x_y", x.getName());
+        
+        Procedure p = factory.addProcedure("a%b.c");
+        assertEquals("x_a%b.c_y", p.getName());
+    }
 	
 }

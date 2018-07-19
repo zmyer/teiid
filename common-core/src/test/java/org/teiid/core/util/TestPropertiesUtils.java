@@ -64,7 +64,7 @@ public class TestPropertiesUtils {
         
         //load from file
         Properties props2 = PropertiesUtils.load(TEMP_FILE);
-        assertEquals("Expected props1 to be equal to props2", 0, PropertiesUtils.compare(props1, props2)); //$NON-NLS-1$
+        assertEquals("Expected props1 to be equal to props2", props1, props2); //$NON-NLS-1$
         
         String header = PropertiesUtils.loadHeader(TEMP_FILE);
         assertEquals("header", header); //$NON-NLS-1$
@@ -84,7 +84,7 @@ public class TestPropertiesUtils {
         
         //load from file
         Properties props2 = PropertiesUtils.load(TEMP_FILE);
-        assertEquals("Expected props1 to be equal to props2", 0, PropertiesUtils.compare(props1, props2)); //$NON-NLS-1$
+        assertEquals("Expected props1 to be equal to props2", props1, props2); //$NON-NLS-1$
     }
     
     
@@ -451,24 +451,6 @@ public class TestPropertiesUtils {
 
     }
     
-    @Test public void testOverrideProperties() {
-        Properties p = new Properties();
-        
-        p.setProperty("foo", "bar");  //$NON-NLS-1$ //$NON-NLS-2$
-        p.setProperty("foo1", "bar1"); //$NON-NLS-1$ //$NON-NLS-2$
-        p.setProperty("foo2", "bar2"); //$NON-NLS-1$ //$NON-NLS-2$
-        
-        Properties p1 = new Properties(p);
-        
-        p1.setProperty("foo", "x"); //$NON-NLS-1$ //$NON-NLS-2$
-        
-        PropertiesUtils.setOverrideProperies(p1, p);
-        
-        assertEquals("bar", p1.getProperty("foo")); //$NON-NLS-1$ //$NON-NLS-2$
-        
-        assertEquals(1, p1.size());
-    }
-    
     @Test public void testGetInvalidInt() {
     	Properties p = new Properties();
     	p.setProperty("x", "y"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -564,5 +546,20 @@ public class TestPropertiesUtils {
     	MyBean test = new MyBean();
     	PropertiesUtils.setBeanProperties(test, p, "org.teiid", true);
     	assertEquals(100, test.getVal());
+    }
+    
+    @Test public void testCombinedProperties() {
+        String old = System.setProperty("org.teiid.val", "200");
+        try {
+            MyBean test = new MyBean();
+            PropertiesUtils.setBeanProperties(test, PropertiesUtils.getCombinedProperties(), "org.teiid", true);
+            assertEquals(200, test.getVal());
+        } finally {
+            if (old != null) {
+                System.setProperty("org.teiid.val", old);
+            } else {
+                System.clearProperty("org.teiid.val");                
+            }
+        }
     }
 }

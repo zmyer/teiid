@@ -1393,6 +1393,14 @@ public class ExecutionFactory<F, C> {
 	
 	/**
 	 * 
+	 * @return true if lateral joins are restricted to only procedures / table valued functions
+	 */
+	public boolean supportsOnlyLateralJoinProcedure() {
+	    return false;
+	}
+	
+	/**
+	 * 
 	 * @return
 	 */
 	public boolean supportsProcedureTable() {
@@ -1403,6 +1411,13 @@ public class ExecutionFactory<F, C> {
 	 * @return true if the source supports upsert
 	 */
 	public boolean supportsUpsert() {
+	    return false;
+	}
+	
+    /**
+     * @return true if the source supports only timestamp add literals
+     */
+	public boolean supportsOnlyTimestampAddLiteral() {
 	    return false;
 	}
 }

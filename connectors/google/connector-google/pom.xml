@@ -4,7 +4,7 @@
     <parent>        
         <groupId>org.teiid.connectors</groupId>
         <artifactId>google</artifactId>
-        <version>10.2.0-SNAPSHOT</version>
+        <version>11.1.0-SNAPSHOT</version>
     </parent>
     <groupId>org.teiid.connectors</groupId>
     <artifactId>connector-google</artifactId>
@@ -40,7 +40,26 @@
         <dependency>
             <groupId>com.google.gdata</groupId>
             <artifactId>core</artifactId>
+            <exclusions>
+            	<exclusion>
+            		<groupId>com.google.code.findbugs</groupId>
+            		<artifactId>jsr305</artifactId>
+            	</exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.google.apis</groupId>
+            <artifactId>google-api-services-sheets</artifactId>
+            <exclusions>
+            	<exclusion>
+            		<groupId>com.google.guava</groupId>
+            		<artifactId>guava-jdk5</artifactId>
+            	</exclusion>
+            	<exclusion>
+            		<groupId>com.google.code.findbugs</groupId>
+            		<artifactId>jsr305</artifactId>
+            	</exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
-    
 </project>

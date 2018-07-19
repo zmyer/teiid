@@ -1,6 +1,8 @@
 <config>
     <extension-module>org.jboss.teiid</extension-module>
     <subsystem xmlns="urn:jboss:domain:teiid:1.1">            
+        <buffer-service max-buffer-space="51200"/>
+        
         <resultset-cache infinispan-container="teiid" name="resultset"/>
         <preparedplan-cache infinispan-container="teiid" name="preparedplan"/>
 
@@ -18,6 +20,7 @@
         <translator name="access" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="db2" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="derby" module="org.jboss.teiid.translator.jdbc"/>
+        <translator name="exasol" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="h2" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="hsql" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="hana" module="org.jboss.teiid.translator.jdbc"/>
@@ -31,6 +34,7 @@
         <translator name="sqlserver" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="sybase" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="sybaseiq" module="org.jboss.teiid.translator.jdbc"/>
+        <translator name="sap-iq" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="teiid" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="teradata" module="org.jboss.teiid.translator.jdbc"/>
         <translator name="modeshape" module="org.jboss.teiid.translator.jdbc"/>

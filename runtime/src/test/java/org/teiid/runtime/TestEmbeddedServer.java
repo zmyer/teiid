@@ -76,10 +76,14 @@ import org.teiid.deployers.VirtualDatabaseException;
 import org.teiid.jdbc.SQLStates;
 import org.teiid.jdbc.TeiidDriver;
 import org.teiid.jdbc.TeiidSQLException;
+import org.teiid.jdbc.tracing.GlobalTracerInjector;
 import org.teiid.language.Command;
 import org.teiid.language.Literal;
 import org.teiid.language.QueryExpression;
 import org.teiid.language.visitor.CollectorVisitor;
+import org.teiid.logging.LogConstants;
+import org.teiid.logging.Logger;
+import org.teiid.logging.MessageLevel;
 import org.teiid.metadata.Column;
 import org.teiid.metadata.MetadataException;
 import org.teiid.metadata.MetadataFactory;
@@ -100,6 +104,11 @@ import org.teiid.translator.UpdateExecution;
 import org.teiid.transport.SSLConfiguration;
 import org.teiid.transport.SocketConfiguration;
 import org.teiid.transport.WireProtocol;
+
+import io.opentracing.Scope;
+import io.opentracing.mock.MockSpan;
+import io.opentracing.mock.MockTracer;
+import io.opentracing.util.GlobalTracer;
 
 @SuppressWarnings("nls")
 public class TestEmbeddedServer {
@@ -345,7 +354,7 @@ public class TestEmbeddedServer {
 		es.deployVDB("empty");
 		c = es.getDriver().connect("jdbc:teiid:empty", null);
 		s = c.createStatement();
-		s.execute("select * from tables");
+		s.execute("select * from sys.tables");
 		
 		assertNotNull(es.getSchemaDdl("empty", "SYS"));
 		assertNull(es.getSchemaDdl("empty", "xxx"));
@@ -426,7 +435,43 @@ public class TestEmbeddedServer {
         ResultSet rs = es.getDriver().connect("jdbc:teiid:test", null).createStatement().executeQuery("select * from helloworld");
         rs.next();
         assertEquals("HELLO WORLD", rs.getString(1));
-    }	
+    }
+    
+    @Test public void testDDLVDBRenameTable() throws Exception {
+        es.start(new EmbeddedConfiguration());
+        
+        String ddl1 = "CREATE DATABASE x VERSION '1';"
+                + "USE DATABASE x VERSION '1';"
+                + "CREATE VIRTUAL SCHEMA test2;"
+                + "SET SCHEMA test2;"
+                + "CREATE VIEW x as select 1;"
+                + "ALTER VIEW x RENAME TO y;";
+        
+        es.deployVDB(new ByteArrayInputStream(ddl1.getBytes("UTF-8")), true);
+        
+        ResultSet rs = es.getDriver().connect("jdbc:teiid:x", null).createStatement().executeQuery("select * from y");
+        rs.next();
+        assertEquals("1", rs.getString(1));
+    }
+    
+    @Test public void testDDLVDBAddColumn() throws Exception {
+        es.start(new EmbeddedConfiguration());
+        
+        String ddl1 = "CREATE DATABASE x VERSION '1';"
+                + "USE DATABASE x VERSION '1';"
+                + "CREATE VIRTUAL SCHEMA test2;"
+                + "SET SCHEMA test2;"
+                + "CREATE VIRTUAL VIEW x (col string) as select 'a';"
+                + "ALTER VIEW x ADD COLUMN y decimal;"
+                + "ALTER VIEW x AS select 'a', 1.1;";
+        
+        es.deployVDB(new ByteArrayInputStream(ddl1.getBytes("UTF-8")), true);
+        
+        ResultSet rs = es.getDriver().connect("jdbc:teiid:x", null).createStatement().executeQuery("select * from x");
+        rs.next();
+        assertEquals("a", rs.getString(1));
+        assertEquals(1.1, rs.getDouble(2), 0);
+    }
     
     @Test public void testDDLVDBImport() throws Exception {
         es.start(new EmbeddedConfiguration());
@@ -443,6 +488,38 @@ public class TestEmbeddedServer {
         
         es.deployVDB(new ByteArrayInputStream(ddl1.getBytes("UTF-8")), true);
         es.deployVDB(new ByteArrayInputStream(ddl2.getBytes("UTF-8")), true);
+    }
+    
+    @Test public void testDDLVDBImportTransitive() throws Exception {
+        es.start(new EmbeddedConfiguration());
+        
+        String ddl1 = "CREATE DATABASE x VERSION '1';"
+                + "USE DATABASE x VERSION '1';"
+                + "CREATE VIRTUAL SCHEMA test2;"
+                + "SET SCHEMA test2;"
+                + "CREATE VIEW x as select 1;";
+        
+        String ddl2 = "CREATE DATABASE test VERSION '1';"
+                + "USE DATABASE test VERSION '1';"
+                + "IMPORT DATABASE x VERSION '1';";
+        
+        String ddl3 = "CREATE DATABASE test2 VERSION '1';"
+                + "USE DATABASE test2 VERSION '1';"
+                + "IMPORT DATABASE x VERSION '1';";
+        
+        String ddl4 = "CREATE DATABASE test3 VERSION '1';"
+                + "USE DATABASE test3 VERSION '1';"
+                + "IMPORT DATABASE test VERSION '1';"
+                + "IMPORT DATABASE test2 VERSION '1';";
+        
+        es.deployVDB(new ByteArrayInputStream(ddl1.getBytes("UTF-8")), true);
+        es.deployVDB(new ByteArrayInputStream(ddl2.getBytes("UTF-8")), true);
+        es.deployVDB(new ByteArrayInputStream(ddl3.getBytes("UTF-8")), true);
+        es.deployVDB(new ByteArrayInputStream(ddl4.getBytes("UTF-8")), true);
+        
+        ResultSet rs = es.getDriver().connect("jdbc:teiid:test3", null).createStatement().executeQuery("select * from x");
+        rs.next();
+        assertEquals("1", rs.getString(1));
     }
     
     @Test(expected=MetadataException.class) public void testAlterImported() throws Exception {
@@ -467,7 +544,7 @@ public class TestEmbeddedServer {
 	@Test public void testDeployDesignerZip() throws Exception {
 		es.start(new EmbeddedConfiguration());
 		es.deployVDBZip(UnitTestUtil.getTestDataFile("matviews.vdb").toURI().toURL());
-		ResultSet rs = es.getDriver().connect("jdbc:teiid:matviews", null).createStatement().executeQuery("select count(*) from tables where schemaname='test'");
+		ResultSet rs = es.getDriver().connect("jdbc:teiid:matviews", null).createStatement().executeQuery("select count(*) from sys.tables where schemaname='test'");
 		rs.next();
 		assertEquals(4, rs.getInt(1));
 	}
@@ -1411,16 +1488,18 @@ public class TestEmbeddedServer {
                     }
                     @Override
                     public List<?> next() throws TranslatorException, DataNotAvailableException {
-                        String status = "SELECT status.TargetSchemaName, status.TargetName, status.Valid, "
-                                + "status.LoadState, status.Updated, status.Cardinality, status.LoadNumber "
-                                + "FROM status WHERE status.VDBName = 'test' AND status.VDBVersion = '1.0.0' "
-                                + "AND status.SchemaName = 'virt' AND status.Name = 'my_view'";
                         if (results == null) {
 	                        String commandString = command.toString();
-							if (hasStatus.get() && commandString.equals(status)) {
-	                            results = Arrays.asList(Arrays.asList(null, "mat_table", valid.get(), loaded.get()?"LOADED":"LOADING", new Timestamp(System.currentTimeMillis()), -1, new Integer(1))).iterator();
-	                        } else if (hasStatus.get() && commandString.startsWith("SELECT status.Valid, status.LoadState FROM status")) {
-	                        	results = Arrays.asList(Arrays.asList(valid.get(), loaded.get()?"LOADED":"LOADING")).iterator();
+							if (commandString.contains(" FROM status")) {
+							    if (hasStatus.get()) {
+							        if (commandString.startsWith("SELECT status.Valid, status.LoadState FROM status")) {
+							            results = Arrays.asList(Arrays.asList(valid.get(), loaded.get()?"LOADED":"LOADING")).iterator();
+		                            } else if (commandString.startsWith("SELECT status.Name, status.TargetSchemaName, status.TargetName, status.Valid, status.LoadState, status.Updated, status.Cardinality, status.LoadNumber")) {
+		                                results = Arrays.asList(Arrays.asList("my_view", "my_schema", "mat_table", valid.get(), loaded.get()?"LOADED":"LOADING", new Timestamp(System.currentTimeMillis()), -1, new Integer(1))).iterator();
+		                            } else {
+		                                throw new AssertionError(commandString);
+		                            }
+							    }
 	                        } else if (loaded.get() && commandString.equals("SELECT mat_table.my_column FROM mat_table")) {
 	                        	matTableCount.getAndIncrement();
 	                        	results = Arrays.asList(Arrays.asList("mat_column0"), Arrays.asList("mat_column1")).iterator();
@@ -1533,6 +1612,8 @@ public class TestEmbeddedServer {
         }
         
         assertEquals(1, tableCount.get());
+        
+        s.execute("update my_schema.status set valid=true");
         
         //make sure a similar name doesn't cause an issue
   		rs = s.executeQuery("select * from (call sysadmin.updateMatView('virt', 'my_view', 'true')) as x");
@@ -2310,6 +2391,31 @@ public class TestEmbeddedServer {
         assertEquals("HELLO WORLD", rs.getString(1));
     }
     
+    @Test public void testDDLNameFormat() throws Exception {
+        es.start(new EmbeddedConfiguration());
+        es.addMetadataRepository("x", new MetadataRepository() {
+            @Override
+            public void loadMetadata(MetadataFactory factory,
+                    ExecutionFactory executionFactory,
+                    Object connectionFactory, String text)
+                    throws TranslatorException {
+                Table t = factory.addTable("helloworld");
+                t.setVirtual(true);
+                factory.addColumn("col", "string", t);
+                t.setSelectTransformation("select 'HELLO WORLD'");
+            }
+        });
+        String externalDDL = "CREATE DATABASE test VERSION '1';"
+                + "USE DATABASE test VERSION '1';"
+                + "CREATE VIRTUAL SCHEMA test2 options ( importer.nameFormat 'prod_%s');"
+                + "IMPORT FOREIGN SCHEMA public FROM REPOSITORY x INTO test2;";
+        
+        es.deployVDB(new ByteArrayInputStream(externalDDL.getBytes(Charset.forName("UTF-8"))), true);
+        ResultSet rs = es.getDriver().connect("jdbc:teiid:test", null).createStatement().executeQuery("select * from prod_helloworld");
+        rs.next();
+        assertEquals("HELLO WORLD", rs.getString(1));
+    }
+    
     @Test public void testFailOver() throws Exception {
         es.start(new EmbeddedConfiguration());
         
@@ -2372,6 +2478,95 @@ public class TestEmbeddedServer {
         }
         rs.close();
         assertEquals(100, count);
+    }
+    
+    @Test public void testOpenTracing() throws Exception {
+        MockTracer tracer = new MockTracer();
+        GlobalTracerInjector.setTracer(tracer);
+        Logger logger = Mockito.mock(Logger.class);
+        Mockito.stub(logger.isEnabled(LogConstants.CTX_COMMANDLOGGING, MessageLevel.DETAIL)).toReturn(false);
+        Mockito.stub(logger.isEnabled(LogConstants.CTX_COMMANDLOGGING_SOURCE, MessageLevel.DETAIL)).toReturn(false);
+        Logger old = org.teiid.logging.LogManager.setLogListener(logger);
+        try {
+            SocketConfiguration s = new SocketConfiguration();
+            InetSocketAddress addr = new InetSocketAddress(0);
+            s.setBindAddress(addr.getHostName());
+            s.setPortNumber(addr.getPort());
+            s.setProtocol(WireProtocol.teiid);
+            EmbeddedConfiguration config = new EmbeddedConfiguration();
+            config.addTransport(s);
+            es.start(config);
+            
+            HardCodedExecutionFactory hcef = new HardCodedExecutionFactory();
+            hcef.addData("SELECT t1.col_t1 FROM t1", Arrays.asList(Arrays.asList("a")));
+            hcef.addData("SELECT t2.col_t2 FROM t2", Arrays.asList(Arrays.asList("b")));
+            es.addTranslator("y", hcef);
+            
+            ModelMetaData mmd = new ModelMetaData();
+            mmd.setName("y");
+            mmd.addSourceMetadata("ddl", "create foreign table t1(col_t1 varchar) options (cardinality 20); "
+                    + "create foreign table t2(col_t2 varchar) options (cardinality 20);");
+            mmd.addSourceMapping("y", "y", null);
+            es.deployVDB("x", mmd);
+            Connection c = es.getDriver().connect("jdbc:teiid:x;", null);
+            Statement stmt = c.createStatement();
+            
+            ResultSet rs = stmt.executeQuery("select * from t1 union all select * from t2");
+            while (rs.next()) {
+                
+            }
+            stmt.close();
+            
+            List<MockSpan> spans = tracer.finishedSpans();
+            assertEquals(0, spans.size());
+            
+            try (Scope ignored = tracer.buildSpan("some operation").startActive(true)) {
+                assertNotNull(tracer.activeSpan());
+                stmt = c.createStatement();
+                //execute with an active span
+                rs = stmt.executeQuery("select * from t1 union all select * from t2");
+                while (rs.next()) {
+                    
+                }
+                stmt.close();
+            }
+            
+            spans = tracer.finishedSpans();
+            
+            //parent span started here, and a child span for the query execution, 2 source queries 
+            assertEquals(spans.toString(), 4, spans.size());
+            
+            tracer.reset();
+            
+            //remote propagation
+            Connection remote = TeiidDriver.getInstance().connect("jdbc:teiid:x@mm://"+addr.getHostName()+":"+es.transports.get(0).getPort(), null);
+            
+            try (Scope ignored = tracer.buildSpan("some remote operation").startActive(true)) {
+                assertNotNull(tracer.activeSpan());
+                stmt = remote.createStatement();
+                //execute with an active span
+                rs = stmt.executeQuery("select * from t1 union all select * from t2");
+                while (rs.next()) {
+                    
+                }
+                stmt.close();
+            }
+            
+            //this isn't ideal, but close is an async event
+            for (int i = 0; i < 1000; i++) {
+                spans = tracer.finishedSpans();
+                if (spans.size() == 2) {
+                    break;
+                }
+                Thread.sleep(10);
+            }
+            
+            //parent span started here, and a child span for the query execution, 2 source queries 
+            assertEquals(4, spans.size());
+        } finally {
+            GlobalTracerInjector.setTracer(GlobalTracer.get());
+            org.teiid.logging.LogManager.setLogListener(old);
+        }
     }
 
 }

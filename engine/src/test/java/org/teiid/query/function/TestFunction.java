@@ -869,6 +869,22 @@ public class TestFunction {
     @Test public void testTimestampAdd2() throws Exception {
     	assertEquals(TimestampUtil.createTimestamp(103, 11, 1, 18, 20, 30, 0), FunctionMethods.timestampAdd(NonReserved.SQL_TSI_HOUR, 3, TimestampUtil.createTimestamp(103, 11, 1, 15, 20, 30, 0)));
     }
+    
+    @Test public void testTimestampAdd3() throws Exception {
+        assertEquals(TimestampUtil.createTimestamp(103, 11, 1, 15, 20, 29, 999999999), FunctionMethods.timestampAdd(NonReserved.SQL_TSI_FRAC_SECOND, -1, TimestampUtil.createTimestamp(103, 11, 1, 15, 20, 30, 0)));
+    }
+    
+    @Test public void testTimestampAdd4() throws Exception {
+        assertEquals(TimestampUtil.createTimestamp(103, 11, 1, 15, 20, 31, 2), FunctionMethods.timestampAdd(NonReserved.SQL_TSI_FRAC_SECOND, 3, TimestampUtil.createTimestamp(103, 11, 1, 15, 20, 30, 999999999)));
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testTimestampAdd5() throws Exception {
+        assertEquals(null, FunctionMethods.timestampAdd(NonReserved.SQL_TSI_FRAC_SECOND, Long.MAX_VALUE, TimestampUtil.createTimestamp(103, 11, 1, 15, 20, 30, 999999999)));
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testTimestampAdd6() throws Exception {
+        assertEquals(null, FunctionMethods.timestampAdd(NonReserved.SQL_TSI_SECOND, (long)Integer.MAX_VALUE + 1, TimestampUtil.createTimestamp(103, 11, 1, 15, 20, 30, 0)));
+    }
 
     @Test public void testTimestampDiffTimeStamp_FracSec_1() throws Exception {
         helpTestTimestampDiff(NonReserved.SQL_TSI_FRAC_SECOND, 
@@ -1136,6 +1152,18 @@ public class TestFunction {
         assertEquals(cal1.get(Calendar.DATE), 1);
               
     }    
+    
+    @Test public void testCurrentTimestamp() throws Exception {
+        CommandContext context = new CommandContext();
+        context.setCurrentTimestamp(1290123456789l);
+        Timestamp current = FunctionMethods.current_timestamp(context, 0);
+        assertEquals(0, current.getNanos());
+        assertNotEquals(context.currentTimestamp(), current);
+        assertEquals(context.currentTimestamp().getTime()/1000, current.getTime()/1000);
+        
+        current = FunctionMethods.current_timestamp(context, 3);
+        assertEquals(789000000, current.getNanos());
+    }
     
     @Test public void testRand() throws Exception {
         Double d = (Double)FunctionMethods.rand(new CommandContext(), new Integer(100));

@@ -175,6 +175,10 @@ public class TestSystemVirtualModel extends AbstractMMQueryTestCase {
 		execute("call logMsg(level=>'DEBUG', context=>'org.teiid.foo', msg=>'hello world')"); //$NON-NLS-1$
 	}
 	
+	@Test(expected=SQLException.class) public void testNotNullParameter() throws Exception {
+        execute("begin declare string x = null; call logMsg(level=>'DEBUG', context=>x, msg=>'a'); end"); //$NON-NLS-1$
+    }
+	
 	@Test(expected=SQLException.class) public void testLogMsg1() throws Exception {
 		execute("call logMsg(level=>'foo', context=>'org.teiid.foo', msg=>'hello world')"); //$NON-NLS-1$
 	}
@@ -199,7 +203,7 @@ public class TestSystemVirtualModel extends AbstractMMQueryTestCase {
 	}
 	
 	@Test public void testArrayAggType() throws Exception {
-		String sql = "SELECT array_agg(name) from tables"; //$NON-NLS-1$
+		String sql = "SELECT array_agg(name) from sys.tables"; //$NON-NLS-1$
 		checkResult("testArrayAggType", sql); //$NON-NLS-1$ //$NON-NLS-2$
 	}
 	
@@ -216,10 +220,11 @@ public class TestSystemVirtualModel extends AbstractMMQueryTestCase {
 	}
 	
 	@Test public void testExpectedTypes() throws Exception {
-		ResultSet rs = this.internalConnection.createStatement().executeQuery("select name from tables where schemaname in ('SYS', 'SYSADMIN')");
+		ResultSet rs = this.internalConnection.createStatement().executeQuery("select name, schemaname from sys.tables where schemaname in ('SYS', 'SYSADMIN')");
 		while (rs.next()) {
 			String name = rs.getString(1);
-			ResultSet rs1 = this.internalConnection.createStatement().executeQuery("select * from " + name + " limit 1");
+			String schemaName = rs.getString(2);
+			ResultSet rs1 = this.internalConnection.createStatement().executeQuery("select * from " + schemaName + "." + name + " limit 1");
 			ResultSetMetaData metadata = rs1.getMetaData();
 			if (rs1.next()) {
 				for (int i = 1; i <= metadata.getColumnCount(); i++) {
@@ -243,16 +248,16 @@ public class TestSystemVirtualModel extends AbstractMMQueryTestCase {
 	@Test public void testColumnsIn() throws Exception {
 		this.internalConnection.close();
 		this.internalConnection = server.createConnection("jdbc:teiid:test");
-		this.execute("select tablename, name from columns where tablename in ('t', 'T')");
+		this.execute("select tablename, name from sys.columns where tablename in ('t', 'T')");
 		//should be 2, not 4 rows
 		assertRowCount(2);
 		
-		this.execute("select tablename, name from columns where upper(tablename) in ('t', 's')");
+		this.execute("select tablename, name from sys.columns where upper(tablename) in ('t', 's')");
 		assertRowCount(0);
 	}
 	
 	@Test public void testViews() throws Exception {
-		checkResult("testViews", "select Name, Body from Views order by Name"); //$NON-NLS-1$ //$NON-NLS-2$
+		checkResult("testViews", "select Name, Body from sysadmin.Views order by Name"); //$NON-NLS-1$ //$NON-NLS-2$
 	}
 	
 	@Test public void testStoredProcedures() throws Exception {

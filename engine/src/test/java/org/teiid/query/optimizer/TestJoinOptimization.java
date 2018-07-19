@@ -503,7 +503,7 @@ public class TestJoinOptimization {
         
         // Plan query
         ProcessorPlan plan = TestOptimizer.helpPlan(sql, RealMetadataFactory.exampleBQTCached(), null, capFinder, 
-                                                    new String[] {"SELECT g_2.IntKey, g_3.IntKey FROM (BQT1.MediumA AS g_0 CROSS JOIN BQT1.MediumB AS g_1) INNER JOIN (BQT1.SmallA AS g_2 LEFT OUTER JOIN BQT1.SmallB AS g_3 ON g_2.StringKey = g_3.StringKey) ON ((g_3.IntKey + g_0.IntKey) + g_1.IntKey) = 1"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
+                                                    new String[] {"SELECT g_3.IntKey, g_2.IntKey FROM (BQT1.MediumA AS g_0 CROSS JOIN BQT1.MediumB AS g_1) INNER JOIN (BQT1.SmallB AS g_2 LEFT OUTER JOIN BQT1.SmallA AS g_3 ON g_3.StringKey = g_2.StringKey) ON ((g_2.IntKey + g_0.IntKey) + g_1.IntKey) = 1"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
 
         TestOptimizer.checkNodeTypes(plan, TestOptimizer.FULL_PUSHDOWN);        
     }
@@ -1280,7 +1280,7 @@ public class TestJoinOptimization {
         cc.getOptions().setAssumeMatchingCollation(false);
         
         // Plan query
-        ProcessorPlan plan = TestProcessor.helpGetPlan(TestOptimizer.helpGetCommand(sql, RealMetadataFactory.exampleBQTCached(), null), RealMetadataFactory.exampleBQTCached(), new DefaultCapabilitiesFinder(bsc), cc);
+        ProcessorPlan plan = TestProcessor.helpGetPlan(TestOptimizer.helpGetCommand(sql, RealMetadataFactory.exampleBQTCached()), RealMetadataFactory.exampleBQTCached(), new DefaultCapabilitiesFinder(bsc), cc);
 
         HardcodedDataManager hdm = new HardcodedDataManager();
         hdm.addData("SELECT g_0.StringKey, g_0.IntKey FROM BQT1.SmallA AS g_0", Arrays.asList("b", 1), Arrays.asList("a", 3));
@@ -1379,6 +1379,7 @@ public class TestJoinOptimization {
         bsc.setCapabilitySupport(Capability.QUERY_FROM_JOIN_LATERAL, true);
         bsc.setCapabilitySupport(Capability.QUERY_FROM_PROCEDURE_TABLE, true);
         bsc.setCapabilitySupport(Capability.QUERY_ORDERBY, true);
+        bsc.setCapabilitySupport(Capability.QUERY_ONLY_FROM_JOIN_LATERAL_PROCEDURE, true);
         
         TransformationMetadata metadata = RealMetadataFactory.fromDDL("create foreign table smallb (intkey integer, stringkey string); "
         		+ "create foreign procedure spTest5 (param integer) returns table(stringkey string, intkey integer)", "x", "y");
@@ -1403,6 +1404,26 @@ public class TestJoinOptimization {
         hdm.addData("EXEC spTest5(1)", Arrays.asList("2", 1));
         
         TestProcessor.helpProcess(plan, hdm, new List<?>[] { Arrays.asList(1, "2", 1)});
+    }
+    
+    @Test public void testLateralOnlyProcedurePushdown() throws Exception {
+        String sql = "select smallb.intkey, x.stringkey, x.intkey "
+                + "from smallb left outer join lateral (select * from smalla where intkey = smallb.intkey) as x on (true)"; //$NON-NLS-1$
+        BasicSourceCapabilities bsc = TestOptimizer.getTypicalCapabilities();
+        bsc.setCapabilitySupport(Capability.QUERY_FROM_JOIN_OUTER, true);
+        bsc.setCapabilitySupport(Capability.QUERY_FROM_JOIN_LATERAL, true);
+        bsc.setCapabilitySupport(Capability.QUERY_FROM_PROCEDURE_TABLE, true);
+        bsc.setCapabilitySupport(Capability.QUERY_ONLY_FROM_JOIN_LATERAL_PROCEDURE, true);
+        
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL("create foreign table smallb (intkey integer, stringkey string); "
+                + "create foreign table smalla (intkey integer, stringkey string);", "x", "y");
+        TestOptimizer.helpPlan(sql, metadata, 
+                new String[] {"SELECT g_0.stringkey, g_0.intkey FROM y.smalla AS g_0 WHERE g_0.intkey = y.smallb.intkey", "SELECT g_0.intkey FROM y.smallb AS g_0"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ //$NON-NLS-2$
+
+        bsc.setCapabilitySupport(Capability.QUERY_ONLY_FROM_JOIN_LATERAL_PROCEDURE, false);
+        
+        TestOptimizer.helpPlan(sql, metadata, 
+                new String[] {"SELECT g_0.intkey, v_0.c_0, v_0.c_1 FROM y.smallb AS g_0 LEFT OUTER JOIN LATERAL(SELECT g_1.stringkey AS c_0, g_1.intkey AS c_1 FROM y.smalla AS g_1 WHERE g_1.intkey = g_0.intkey) AS v_0 ON 1 = 1"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ //$NON-NLS-2$
     }
     
 	@Test public void testDistinctDetectionWithUnionAll() throws Exception {
@@ -1434,7 +1455,7 @@ public class TestJoinOptimization {
 	}
 	
 	@Test public void testEnhancedJoinWithLeftDuplicates() throws Exception {
-		String sql = "select * from (select 3 as a, 3 as b union all select 1 as a, 1 as b union all select 3 as a, 3 as b) as t1 join test_a t2 on t1.a=t2.a limit 10";
+		String sql = "select t2.*, t1.* from (select 3 as a, 3 as b union all select 1 as a, 1 as b union all select 3 as a, 3 as b) as t1 join test_a t2 on t1.a=t2.a limit 10";
 		
 		TransformationMetadata metadata = RealMetadataFactory.fromDDL("CREATE foreign TABLE test_a (  a integer,  b integer );", "x", "y");
 		HardcodedDataManager hdm = new HardcodedDataManager();
@@ -1490,14 +1511,14 @@ public class TestJoinOptimization {
     }
 	
 	@Test public void testInnerOuterOptimization() throws TeiidComponentException, TeiidProcessingException {
-        String sql = "select * from (pm2.g1 inner join pm1.g2 on (pm2.g1.e1 = pm1.g2.e1) inner join pm2.g3 on (pm1.g2.e2 = pm2.g3.e2)) left outer join pm1.g4 on (pm1.g2.e4 = pm1.g4.e4)"; //$NON-NLS-1$
+        String sql = "select g4.*, g3.*, g2.*, g1.* from (pm2.g1 inner join pm1.g2 on (pm2.g1.e1 = pm1.g2.e1) inner join pm2.g3 on (pm1.g2.e2 = pm2.g3.e2)) left outer join pm1.g4 on (pm1.g2.e4 = pm1.g4.e4)"; //$NON-NLS-1$
         
         BasicSourceCapabilities bsc = TestOptimizer.getTypicalCapabilities();
         
         DefaultCapabilitiesFinder capFinder = new DefaultCapabilitiesFinder(bsc);
         
         ProcessorPlan plan = TestOptimizer.helpPlan(sql, RealMetadataFactory.example1Cached(), new String[] {"SELECT g_0.e2 AS c_0, g_0.e1 AS c_1, g_0.e3 AS c_2, g_0.e4 AS c_3 FROM pm2.g3 AS g_0 ORDER BY c_0", 
-            "SELECT g_1.e1 AS c_0, g_1.e2 AS c_1, g_0.e1 AS c_2, g_0.e3 AS c_3, g_1.e3 AS c_4, g_1.e4 AS c_5 FROM pm1.g4 AS g_0 LEFT OUTER JOIN pm1.g2 AS g_1 ON g_1.e4 = g_0.e4 ORDER BY c_0", 
+            "SELECT g_0.e1 AS c_0, g_0.e2 AS c_1, g_1.e1 AS c_2, g_1.e3 AS c_3, g_0.e3 AS c_4, g_0.e4 AS c_5 FROM pm1.g2 AS g_0 LEFT OUTER JOIN pm1.g4 AS g_1 ON g_0.e4 = g_1.e4 ORDER BY c_0", 
             "SELECT g_0.e1 AS c_0, g_0.e2 AS c_1, g_0.e3 AS c_2, g_0.e4 AS c_3 FROM pm2.g1 AS g_0 ORDER BY c_0"}, capFinder, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ //$NON-NLS-2$
 
         TestOptimizer.checkNodeTypes(plan, new int[] {

@@ -19,6 +19,7 @@ package org.teiid.query.metadata;
 
 import static org.junit.Assert.*;
 
+import java.util.List;
 import java.util.Properties;
 
 import org.junit.Before;
@@ -26,6 +27,9 @@ import org.junit.Test;
 import org.teiid.adminapi.Model;
 import org.teiid.adminapi.impl.ModelMetaData;
 import org.teiid.adminapi.impl.VDBMetaData;
+import org.teiid.metadata.BaseColumn.NullType;
+import org.teiid.metadata.Column;
+import org.teiid.metadata.Column.SearchType;
 import org.teiid.metadata.MetadataFactory;
 import org.teiid.metadata.MetadataStore;
 import org.teiid.metadata.ParseException;
@@ -38,7 +42,10 @@ import org.teiid.query.validator.ValidatorReport;
 
 @SuppressWarnings("nls")
 public class TestMetadataValidator {
-	public static final SystemFunctionManager SFM = SystemMetadata.getInstance().getSystemFunctionManager();
+	private static final String STATUS = "create foreign table status (VDBNAME STRING, VDBVERSION STRING, "
+    				+ " SCHEMANAME STRING, NAME STRING, TARGETSCHEMANAME STRING, TARGETNAME STRING, "
+    				+ " VALID BOOLEAN, LOADSTATE STRING, CARDINALITY LONG, UPDATED TIMESTAMP, LOADNUMBER LONG, NODENAME STRING, STALECOUNT LONG)";
+    public static final SystemFunctionManager SFM = SystemMetadata.getInstance().getSystemFunctionManager();
 	private VDBMetaData vdb = new VDBMetaData();
 	private MetadataStore store = new MetadataStore();
 	
@@ -244,6 +251,26 @@ public class TestMetadataValidator {
 	}
 	
 	@Test
+    public void testCrossReferenceFKReferenceOrder() throws Exception {
+        String ddl = "CREATE FOREIGN TABLE G1(g1e1 integer, g1e2 integer, PRIMARY KEY(g1e1, g1e2));";
+        String ddl2 = "CREATE FOREIGN TABLE G2( g2e1 integer, g2e2 integer, PRIMARY KEY(g2e1, g2e2), FOREIGN KEY (g2e1, g2e2) REFERENCES pm1.G1(g1e2, g1e1))";      
+        
+        buildModel("pm1", true, this.vdb, this.store, ddl);
+        buildModel("pm2", true, this.vdb, this.store, ddl2);
+        
+        buildTransformationMetadata();
+        
+        ValidatorReport report = new ValidatorReport();
+        report = new MetadataValidator().validate(this.vdb, this.store);
+        assertFalse(printError(report), report.hasItems());
+        
+        assertNotNull(this.store.getSchema("pm2").getTable("G2").getForeignKeys().get(0).getReferenceKey());
+        assertEquals(2, this.store.getSchema("pm2").getTable("G2").getForeignKeys().get(0).getReferenceKey().getColumns().size());
+        assertEquals("g1e1", this.store.getSchema("pm2").getTable("G2").getForeignKeys().get(0).getReferenceKey().getColumns().get(0).getName());
+        assertEquals("g2e2", this.store.getSchema("pm2").getTable("G2").getForeignKeys().get(0).getColumns().get(0).getName());
+    }
+	
+	@Test
 	public void testEmptyKey() throws Exception {
 		String ddl = "CREATE FOREIGN TABLE G1(g1e1 integer, g1e2 varchar, PRIMARY KEY(g1e1, g1e2));";
 		
@@ -332,9 +359,7 @@ public class TestMetadataValidator {
 	@Test
 	public void testExternalMaterializationValidate() throws Exception {
 		String ddl = "CREATE FOREIGN TABLE G1(e1 integer, e2 varchar);"
-				+ "create foreign table status (VDBNAME STRING, VDBVERSION STRING, "
-				+ " SCHEMANAME STRING, NAME STRING, TARGETSCHEMANAME STRING, TARGETNAME STRING, "
-				+ " VALID BOOLEAN, LOADSTATE STRING, CARDINALITY LONG, UPDATED TIMESTAMP, LOADNUMBER LONG, NODENAME STRING, STALECOUNT LONG)";
+				+ STATUS;
 		String ddl2 = "CREATE VIEW G2 OPTIONS (MATERIALIZED 'true', MATERIALIZED_TABLE 'pm1.G1', \"teiid_rel:MATVIEW_STATUS_TABLE\" 'pm1.status', \"teiid_rel:MATVIEW_LOAD_SCRIPT\" 'begin end') AS SELECT * FROM pm1.G1";		
 		
 		buildModel("pm1", true, this.vdb, this.store, ddl);
@@ -352,9 +377,7 @@ public class TestMetadataValidator {
 	@Test
 	public void testExternalMaterializationValidateColumns() throws Exception {
 		String ddl = "CREATE FOREIGN TABLE G1(e2 varchar);"
-				+ "create foreign table status (VDBNAME STRING, VDBVERSION STRING, "
-				+ " SCHEMANAME STRING, NAME STRING, TARGETSCHEMANAME STRING, TARGETNAME STRING, "
-				+ " VALID BOOLEAN, LOADSTATE STRING, CARDINALITY LONG, UPDATED TIMESTAMP, LOADNUMBER LONG, NODENAME STRING, STALECOUNT LONG)";
+				+ STATUS;
 		String ddl2 = "CREATE VIEW G2 (e1 integer, e2 varchar) OPTIONS (MATERIALIZED 'true', MATERIALIZED_TABLE 'pm1.G1', \"teiid_rel:MATVIEW_STATUS_TABLE\" 'pm1.status', \"teiid_rel:MATVIEW_LOAD_SCRIPT\" 'begin end') AS SELECT 1, 'a' FROM pm1.G1";		
 		
 		buildModel("pm1", true, this.vdb, this.store, ddl);
@@ -370,9 +393,7 @@ public class TestMetadataValidator {
 	@Test
 	public void testExternalMaterializationValidateColumnTypes() throws Exception {
 		String ddl = "CREATE FOREIGN TABLE G1(e1 integer, e2 integer);"
-				+ "create foreign table status (VDBNAME STRING, VDBVERSION STRING, "
-				+ " SCHEMANAME STRING, NAME STRING, TARGETSCHEMANAME STRING, TARGETNAME STRING, "
-				+ " VALID BOOLEAN, LOADSTATE STRING, CARDINALITY LONG, UPDATED TIMESTAMP, LOADNUMBER LONG, NODENAME STRING, STALECOUNT STRING)";
+				+ STATUS;
 		String ddl2 = "CREATE VIEW G2 (e1 integer, e2 varchar) OPTIONS (MATERIALIZED 'true', MATERIALIZED_TABLE 'pm1.G1', \"teiid_rel:MATVIEW_STATUS_TABLE\" 'pm1.status', \"teiid_rel:MATVIEW_LOAD_SCRIPT\" 'begin end') AS SELECT 1, 'a' FROM pm1.G1";		
 		
 		buildModel("pm1", true, this.vdb, this.store, ddl);
@@ -399,6 +420,28 @@ public class TestMetadataValidator {
 		report = new MetadataValidator().validate(this.vdb, this.store);
 		assertTrue(printError(report), report.hasItems());
 	}
+	
+    @Test
+    public void testExternalMaterializationValidateModelStatus() throws Exception {
+        String ddl = "CREATE FOREIGN TABLE G1(e1 integer, e2 varchar);"
+                + STATUS;
+        String ddl2 = "CREATE VIEW G2 OPTIONS (MATERIALIZED 'true', MATERIALIZED_TABLE 'pm1.G1', \"teiid_rel:MATVIEW_LOAD_SCRIPT\" 'begin end') AS SELECT * FROM pm1.G1";      
+        
+        buildModel("pm1", true, this.vdb, this.store, ddl);
+        ModelMetaData vm1 = buildModel("vm1", false, this.vdb, this.store, ddl2);
+        
+        buildTransformationMetadata();
+        
+        ValidatorReport report = new ValidatorReport();
+        report = new MetadataValidator().validate(this.vdb, this.store);
+        assertTrue(printError(report), report.hasItems());
+        
+        vm1.addProperty(MaterializationMetadataRepository.MATVIEW_STATUS_TABLE, "pm1.status");
+        
+        report = new ValidatorReport();
+        report = new MetadataValidator().validate(this.vdb, this.store);
+        assertFalse(printError(report), report.hasItems());
+    }
 	
 	@Test
 	public void testExternalMaterializationValidateMissingColumns() throws Exception {
@@ -571,6 +614,122 @@ public class TestMetadataValidator {
         //old is not resolvable with insert
         assertTrue(printError(report), report.hasItems());
     }
+    
+    @Test
+    public void testMultipleUnique() throws Exception {
+        String ddl = "CREATE FOREIGN TABLE G1(\n" +
+                "e1 integer primary key,\n" +
+                "e2 varchar(10) unique,\n" +
+                "e3 date not null unique)";
+        
+        buildModel("phy1", true, this.vdb, this.store, ddl);
+        
+        buildTransformationMetadata();
+        
+        ValidatorReport report = new MetadataValidator().validate(this.vdb, this.store);
+        
+        assertFalse(printError(report), report.hasItems());
+    }   
+    
+    @Test
+    public void testSetQueryViewWithoutColumns() throws Exception {
+        String ddl = "CREATE FOREIGN TABLE G1(\n" +
+                "e1 varchar(10) primary key,\n" +
+                "e2 varchar(100) unique,\n" +
+                "e3 decimal(12,5),\n" +
+                "e4 decimal(14,3));"
+                + " create view v1 as select e1, e3 from G1 union all select e2, e4 from G1;";
+        
+        buildModel("phy1", true, this.vdb, this.store, ddl);
+        
+        buildTransformationMetadata();
+        
+        ValidatorReport report = new MetadataValidator().validate(this.vdb, this.store);
+        
+        assertFalse(printError(report), report.hasItems());
+        
+        Table table = store.getSchema("phy1").getTable("v1");
+        
+        List<Column> columns = table.getColumns();
+        Column e1 = columns.get(0);
+        Column e3 = columns.get(1);
+        
+        assertEquals("e1", e1.getName());
+        assertEquals("string", e1.getDatatype().getName());
+        assertEquals(100, e1.getLength());
+        
+        assertEquals("e3", e3.getName());
+        assertEquals("bigdecimal", e3.getDatatype().getName());
+        assertEquals(14, e3.getPrecision());
+        assertEquals(5, e3.getScale());
+    }
+
+    @Test
+    public void testViewWithoutColumns() throws Exception {
+        String ddl = "CREATE FOREIGN TABLE G1(\n" +
+                "e1 integer primary key,\n" +
+                "e2 varchar(10) unique,\n" +
+                "e3 date not null unique,\n" +
+                "e4 decimal(12,3) default 12.2 options (searchable 'unsearchable'),\n" +
+                "e5 integer auto_increment INDEX OPTIONS (UUID 'uuid', NAMEINSOURCE 'nis', SELECTABLE 'NO'),\n" +
+                "e6 varchar index default 'hello')\n" +
+                "OPTIONS (CARDINALITY 12, UUID 'uuid2',  UPDATABLE 'true', FOO 'BAR', ANNOTATION 'Test Table'); "
+                + " create view v1 as select G1.*, 'a' from G1;";
+        
+        buildModel("phy1", true, this.vdb, this.store, ddl);
+        
+        buildTransformationMetadata();
+        
+        ValidatorReport report = new MetadataValidator().validate(this.vdb, this.store);
+        
+        assertFalse(printError(report), report.hasItems());
+        
+        Table table = store.getSchema("phy1").getTable("v1");
+        
+        assertTrue(table.isVirtual());
+        assertFalse(table.isSystem());
+        assertFalse(table.isMaterialized());
+        assertFalse(table.isDeletePlanEnabled());
+        assertFalse(table.supportsUpdate());
+        
+        assertEquals(6, table.getColumns().size());
+        
+        List<Column> columns = table.getColumns();
+        Column e1 = columns.get(0);
+        Column e2 = columns.get(1);
+        Column e3 = columns.get(2);
+        Column e4 = columns.get(3);
+        Column e6 = columns.get(4);
+        Column e7 = columns.get(5);
+        
+        assertEquals("e1", e1.getName());
+        assertEquals("integer", e1.getDatatype().getName());
+        
+        assertEquals("e2", e2.getName());
+        assertEquals("string", e2.getDatatype().getName());
+        assertEquals(NullType.Nullable, e2.getNullType());
+        assertEquals(10, e2.getLength());
+        assertEquals(0, e2.getPrecision());
+        
+        assertEquals("e3", e3.getName());
+        assertEquals("date", e3.getDatatype().getName());
+        assertEquals(NullType.No_Nulls, e3.getNullType());      
+        
+        assertEquals("e4", e4.getName());
+        assertEquals("bigdecimal", e4.getDatatype().getName());
+        assertEquals(false, e4.isAutoIncremented());
+        assertEquals(12, e4.getPrecision());
+        assertEquals(3, e4.getScale());
+        assertEquals(SearchType.Searchable, e4.getSearchType());
+        assertEquals(null, e4.getDefaultValue());
+        
+        assertEquals("e6", e6.getName());
+        assertEquals("string", e6.getDatatype().getName());
+        
+        assertEquals("expr2", e7.getName());
+        assertEquals("string", e7.getDatatype().getName());
+        assertEquals(1, e7.getLength());
+    }  
     
 	private ValidatorReport helpTest(String ddl, boolean expectErrors) throws Exception {
 		buildModel("pm1", true, this.vdb, this.store, ddl);

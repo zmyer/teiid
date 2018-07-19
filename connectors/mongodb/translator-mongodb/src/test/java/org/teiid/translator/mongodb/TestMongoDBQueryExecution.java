@@ -62,16 +62,7 @@ import org.teiid.translator.ExecutionContext;
 import org.teiid.translator.ResultSetExecution;
 import org.teiid.translator.TranslatorException;
 
-import com.mongodb.AggregationOptions;
-import com.mongodb.AggregationOutput;
-import com.mongodb.BasicDBList;
-import com.mongodb.BasicDBObject;
-import com.mongodb.BasicDBObjectBuilder;
-import com.mongodb.Cursor;
-import com.mongodb.DB;
-import com.mongodb.DBCollection;
-import com.mongodb.DBObject;
-import com.mongodb.QueryBuilder;
+import com.mongodb.*;
 
 @SuppressWarnings("nls")
 public class TestMongoDBQueryExecution {
@@ -862,17 +853,17 @@ public class TestMongoDBQueryExecution {
     	DBCollection dbCollection = helpExecute(query, new String[]{"users"}, 3);
 
 		BasicDBObject project = new BasicDBObject();
-	    project.append( "total",1);
+	    project.append( "_m0",1);
 
 	    BasicDBObject id = new BasicDBObject();
 	    id.append( "_c0","$user_id");
 
 	    BasicDBObject group = new BasicDBObject("_id", id);
-	    group.append("total", new BasicDBObject("$sum", "$age"));
+	    group.append("_m0", new BasicDBObject("$sum", "$age"));
 
 	    List<DBObject> pipeline = buildArray(
 	    		new BasicDBObject("$group", group),
-	    		new BasicDBObject("$match", QueryBuilder.start("total").greaterThan(250).get()),
+	    		new BasicDBObject("$match", QueryBuilder.start("_m0").greaterThan(250).get()),
 				new BasicDBObject("$project", project));
 	    ArgumentCaptor<List> actualCapture = ArgumentCaptor.forClass(List.class);
 	    Mockito.verify(dbCollection).aggregate(actualCapture.capture(), Mockito.any(AggregationOptions.class));
@@ -886,18 +877,18 @@ public class TestMongoDBQueryExecution {
 		DBCollection dbCollection = helpExecute(query, new String[]{"users"}, 4);
 
 		BasicDBObject project = new BasicDBObject();
-	    project.append( "total",1);
+	    project.append( "_m0",1);
 
 	    BasicDBObject id = new BasicDBObject();
 	    id.append( "_c0","$user_id");
 
 	    BasicDBObject group = new BasicDBObject("_id", id);
-	    group.append("total", new BasicDBObject("$sum", "$age"));
+	    group.append("_m0", new BasicDBObject("$sum", "$age"));
 
 	    ArrayList<DBObject> pipeline = buildArray(
 	    		new BasicDBObject("$match", QueryBuilder.start("age").greaterThan(45).get()),
 	    		new BasicDBObject("$group", group),
-	    		new BasicDBObject("$match", QueryBuilder.start("total").greaterThan(250).get()),
+	    		new BasicDBObject("$match", QueryBuilder.start("_m0").greaterThan(250).get()),
 				new BasicDBObject("$project", project));
 
 	    ArgumentCaptor<List> actualCapture = ArgumentCaptor.forClass(List.class);
@@ -1099,7 +1090,7 @@ public class TestMongoDBQueryExecution {
 
         BasicDBObject result = new BasicDBObject();
         result.append( "_m0", new BasicDBObject("$concat", params));
-        result.append( "_m1", "$CategoryName");
+        result.append( "CategoryName", "$CategoryName");
 
         List<DBObject> pipeline = buildArray(
                         new BasicDBObject("$project", result),
@@ -1107,6 +1098,32 @@ public class TestMongoDBQueryExecution {
         Mockito.verify(dbCollection).aggregate(Mockito.eq(pipeline), Mockito.any(AggregationOptions.class));
     }
 
+    @Test
+    public void testDateFunction() throws Exception {
+        String query = "SELECT YEAR(e2) FROM TIME_TEST";
+
+        DBCollection dbCollection = helpExecute(query, new String[]{"TIME_TEST"}, 1);
+
+        BasicDBList params = new BasicDBList();
+        params.add("$e2");
+
+        BasicDBList values = new BasicDBList();
+        values.add(0, "$e2");
+        values.add(1, false);        
+        BasicDBObject isNull = new BasicDBObject("$ifNull", values);  
+        
+        BasicDBObject func = new BasicDBObject("$year", params);
+        BasicDBObject expr = buildCondition(isNull, func, null);
+        
+        BasicDBObject result = new BasicDBObject();
+        result.append( "_m0", expr);
+        
+        //{ "$cond" : [ { "$ifNull" : [ "$e2" ,  false ]} ,  { "$year" : [ "$e2"]}, null]}
+
+        List<DBObject> pipeline = buildArray(new BasicDBObject("$project", result));
+        Mockito.verify(dbCollection).aggregate(Mockito.eq(pipeline), Mockito.any(AggregationOptions.class));
+    }
+    
     @Test
     public void testSubStr() throws Exception {
         String query = "SELECT SUBSTRING(CategoryName, 3) FROM Categories";

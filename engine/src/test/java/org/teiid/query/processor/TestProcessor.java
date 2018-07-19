@@ -5202,11 +5202,11 @@ public class TestProcessor {
 			QueryMetadataInterface metadata, List<?> values) throws Exception {
 		Command command = helpParse(sql);   
         CommandContext context = createCommandContext();
-        context.setMetadata(metadata);        
-        ProcessorPlan plan = helpGetPlan(command, metadata, capFinder, context);
-        
+        context.setMetadata(metadata);       
         // Collect reference, set value
         setParameterValues(values, command, context);
+        ProcessorPlan plan = helpGetPlan(command, metadata, capFinder, context);
+        
         // Run query
         helpProcess(plan, context, dataManager, expected);
 	}
@@ -7954,7 +7954,7 @@ public class TestProcessor {
                 "    END;"
                 + "create foreign table test_t1(col_t1 varchar) options (cardinality 1)", "x", "y");
         
-        String sql = "SELECT *\n" + 
+        String sql = "SELECT d.*,x.*,xxx.*,dl.*\n" + 
                 "    FROM (SELECT 'League' AS type, 1 AS arg0) xxx, test_t1 dl, table(CALL pr0(arg0)) x\n" + 
                 "    JOIN test_t1 d ON d.col_t1 = 'str_val'";
         BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
@@ -7965,6 +7965,82 @@ public class TestProcessor {
         dataManager.addData("SELECT g_0.col_t1 FROM y.test_t1 AS g_0", Arrays.asList("str_val"));
         TestProcessor.helpProcess(plan, dataManager, new List<?>[] {Arrays.asList("str_val", "2017-01-01", "League", 1, "str_val")});
     }
+	
+	@Test public void testLateralJoinMixedFromClause() throws Exception {
+	    String ddl = "create view v as select 1 a, 2 b;";
+	    
+	    TransformationMetadata metadata = RealMetadataFactory.fromDDL(ddl, "x", "views");
+	    
+        String sql = "select x4.*,x3.*,x2.*,x1.* from v x1, table(select x1.a a) x2 join v x3 on x2.a=x3.a join v x4 on x4.a=x3.a";
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        ProcessorPlan plan = TestProcessor.helpGetPlan(sql, metadata, new DefaultCapabilitiesFinder(caps));
+        HardcodedDataManager dataManager = new HardcodedDataManager();
+        TestProcessor.helpProcess(plan, dataManager, new List<?>[] {Arrays.asList(1,2,1,2,1,1,2)});
+        
+        sql = "select x4.*,x3.*,x2.*,x1.* from views.v x1, xmltable('/a' PASSING xmlparse(document '<a id=\"' || x1.a || '\"/>') COLUMNS a integer PATH '@id') x2 join views.v x3 on x2.a=x3.a join views.v x4 on x4.a=x3.a";
+        plan = TestProcessor.helpGetPlan(sql, metadata, new DefaultCapabilitiesFinder(caps));
+        TestProcessor.helpProcess(plan, dataManager, new List<?>[] {Arrays.asList(1,2,1,2,1,1,2)});
+	}
+	
+	@Test public void testNestedRightJoinWithLateral() throws Exception {
+        String ddl = "create view v as select 1 a, 2 b;";
+        
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL(ddl, "x", "views");
+        
+        String sql = "select * from (select 1 e1) g1, ((select 1 e1) g2 right outer join lateral(select g1.e1) x on g2.e1 = x.e1)";
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        ProcessorPlan plan = TestProcessor.helpGetPlan(sql, metadata, new DefaultCapabilitiesFinder(caps));
+        HardcodedDataManager dataManager = new HardcodedDataManager();
+        TestProcessor.helpProcess(plan, dataManager, new List<?>[] {Arrays.asList(1,1,1)});
+    }
+	
+	@Test public void testTableAliasWithPeriod() throws Exception {
+        String sql = "select \"pm1.g2\".* from pm1.g1 as \"pm1.g2\"";
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        ProcessorPlan plan = TestProcessor.helpGetPlan(sql, RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(caps));
+        HardcodedDataManager dataManager = new HardcodedDataManager(RealMetadataFactory.example1Cached());
+        dataManager.addData("SELECT g_0.e1, g_0.e2, g_0.e3, g_0.e4 FROM g1 AS g_0", new List<?>[0]);
+        TestProcessor.helpProcess(plan, dataManager, new List<?>[0]);
+    }
+	
+   @Test public void testTableAliasWithPeriodCorrelated() throws Exception {
+        String sql = "select (select e2 from pm1.g3 where e1 = \"pm1.g2\".e1) from pm1.g1 as \"pm1.g2\"";
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        ProcessorPlan plan = TestProcessor.helpGetPlan(sql, RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(caps));
+        HardcodedDataManager dataManager = new HardcodedDataManager(RealMetadataFactory.example1Cached());
+        dataManager.addData("SELECT g_0.e1 FROM g1 AS g_0", new List<?>[] {Arrays.asList("a")});
+        dataManager.addData("SELECT g_0.e2 FROM g3 AS g_0 WHERE g_0.e1 = 'a'", new List<?>[] {Arrays.asList(1)});
+        TestProcessor.helpProcess(plan, dataManager, new List<?>[] {Arrays.asList(1)});
+    }
+	
+   @Test public void testPartialProjectionPushdownWithInlineView() throws Exception {
+       String sql = "select \n" + 
+               "    timestampdiff(SQL_TSI_HOUR, ObsoleteDate, storn) as diff,\n" + 
+               "    case when UnitMeasureCode='platnosci' or UnitMeasureCode like '%PayU - szybkie%' then 'PAYU' else '' end as payu,\n" + 
+               "    case when UnitMeasureCode in ('moneyorder','Przelew bankowy') then 'przelew' else '' end as przelew \n" + 
+               "from (select ObsoleteDate,UnitMeasureCode, MIN(ModifiedDate) as storn from nw.billofmaterials group by ObsoleteDate,UnitMeasureCode ) w";
+       
+       TransformationMetadata tm = RealMetadataFactory.fromDDL("CREATE FOREIGN TABLE billofmaterials (\n" + 
+               "AssemblyID integer, \n" + 
+               "BillOfMaterialsID integer PRIMARY KEY,\n" + 
+               "ComponentID integer,\n" + 
+               "BOMLevel integer,\n" + 
+               "UnitMeasureCode varchar(3),\n" + 
+               "ObsoleteDate timestamp,\n" + 
+               "ModifiedDate timestamp)", "TEIID-5408", "nw");
+       
+       BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+       caps.setCapabilitySupport(Capability.QUERY_GROUP_BY, true);
+       caps.setCapabilitySupport(Capability.QUERY_AGGREGATES_MIN, true);
+       caps.setCapabilitySupport(Capability.QUERY_FROM_INLINE_VIEWS, true);
+       caps.setCapabilitySupport(Capability.QUERY_SEARCHED_CASE, true);
+       
+       ProcessorPlan plan = TestProcessor.helpGetPlan(sql, tm, new DefaultCapabilitiesFinder(caps));
+       HardcodedDataManager dataManager = new HardcodedDataManager(RealMetadataFactory.example1Cached());
+       dataManager.addData("SELECT v_0.c_0, v_0.c_1, CASE WHEN v_0.c_2 = 'platnosci' OR v_0.c_2 LIKE '%PayU - szybkie%' THEN 'PAYU' ELSE '' END, CASE WHEN v_0.c_2 IN ('moneyorder', 'Przelew bankowy') THEN 'przelew' ELSE '' END FROM (SELECT g_0.ObsoleteDate AS c_0, MIN(g_0.ModifiedDate) AS c_1, g_0.UnitMeasureCode AS c_2 FROM billofmaterials AS g_0 GROUP BY g_0.ObsoleteDate, g_0.UnitMeasureCode) AS v_0",
+               new List<?>[] {Arrays.asList(TimestampUtil.createTimestamp(0, 0, 0, 0, 0, 0, 0), TimestampUtil.createTimestamp(0, 0, 0, 5, 0, 0, 0), "abc", "xyz")});
+       TestProcessor.helpProcess(plan, dataManager, new List<?>[] {Arrays.asList(5l, "abc", "xyz")});
+   }
 	
     private static final boolean DEBUG = false;
 }

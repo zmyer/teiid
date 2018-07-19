@@ -87,13 +87,13 @@ public class FunctionMethod extends AbstractMetadataRecord {
      */
     public enum Determinism{
     	NONDETERMINISTIC,
+    	INSTRUCTION_DETERMINISTIC, //specifically for the now function which is not fully non-deterministic TEIID-5290
     	COMMAND_DETERMINISTIC,
     	SESSION_DETERMINISTIC,
     	USER_DETERMINISTIC,
     	VDB_DETERMINISTIC,
     	DETERMINISTIC;
     }
-    
 
     private String description;
     private String category;
@@ -277,7 +277,7 @@ public class FunctionMethod extends AbstractMetadataRecord {
     }
     
     /**
-     * Get ouput/return parameter.
+     * Get output/return parameter.
      * @return Output parameter or return argument
      */
     public FunctionParameter getOutputParameter() { 
@@ -285,7 +285,7 @@ public class FunctionMethod extends AbstractMetadataRecord {
     }
     
     /**
-     * Set ouput/return parameter.
+     * Set output/return parameter.
      * @param param Output Parameter
      */
     public void setOutputParameter(FunctionParameter param) {

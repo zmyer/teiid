@@ -716,5 +716,41 @@ public class TestInsertProcessing {
         secondResult[0] = Arrays.asList(2, null, null, null, null, null, null, null, null, null, null, null, '+', null, null, null, null);
         helpProcess(plan, dataManager, expected);
     }
+    
+    @Test public void testInsertWithRemovableInlineView() throws Exception {
+        TransformationMetadata tm = RealMetadataFactory.fromDDL("create foreign table test_rank(a integer);"
+                + "create foreign table test_rank_copy(a integer) options (updatable true);"
+                + "create view v as select rank() over (order by a) from test_rank", "x", "y");
+        
+        String sql = "select * into test_rank_copy from v";
+        
+        HardcodedDataManager dataManager = new HardcodedDataManager(tm);
+        dataManager.addData("INSERT INTO test_rank_copy (a) SELECT RANK() OVER (ORDER BY g_0.a) FROM test_rank AS g_0", Arrays.asList(2));
+        
+        List<?>[] expected = new List[] { 
+                Arrays.asList(2)
+        }; 
+        
+        BasicSourceCapabilities bsc = TestOptimizer.getTypicalCapabilities();
+        bsc.setCapabilitySupport(Capability.INSERT_WITH_QUERYEXPRESSION, true);
+        bsc.setCapabilitySupport(Capability.ELEMENTARY_OLAP, true);
+        bsc.setCapabilitySupport(Capability.QUERY_FROM_INLINE_VIEWS, true);
+        ProcessorPlan plan = helpGetPlan(sql, tm, new DefaultCapabilitiesFinder(bsc));
+        helpProcess(plan, dataManager, expected);
+        
+        sql = "select * into test_rank_copy from /*+ no_unnest */ (select rank() over (order by a) from test_rank) v1";
+        
+        plan = helpGetPlan(sql, tm, new DefaultCapabilitiesFinder(bsc));
+
+        dataManager.clearData();
+        dataManager.addData("INSERT INTO test_rank_copy (a) SELECT v_0.c_0 FROM"
+                + " (SELECT RANK() OVER (ORDER BY g_0.a) AS c_0 FROM test_rank AS g_0) AS v_0", Arrays.asList(3));
+        
+        expected = new List[] { 
+                Arrays.asList(3)
+        }; 
+        
+        helpProcess(plan, dataManager, expected);
+    }
 
 }

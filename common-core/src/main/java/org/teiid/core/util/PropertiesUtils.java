@@ -62,10 +62,7 @@ public final class PropertiesUtils {
     /**
      * Performs a correct deep clone of the properties object by capturing
      * all properties in the default(s) and placing them directly into the
-     * new Properties object.  If the input is an instance of
-     * <code>UnmodifiableProperties</code>, this method returns an
-     * <code>UnmodifiableProperties</code> instance around a new (flattened)
-     * copy of the underlying Properties object.
+     * new Properties object. 
      */
     public static Properties clone( Properties props ) {
         return clone(props, null, false);
@@ -74,10 +71,7 @@ public final class PropertiesUtils {
     /**
      * Performs a correct deep clone of the properties object by capturing
      * all properties in the default(s) and placing them directly into the
-     * new Properties object.  If the input is an instance of
-     * <code>UnmodifiableProperties</code>, this method returns an
-     * <code>UnmodifiableProperties</code> instance around a new (flattened)
-     * copy of the underlying Properties object.
+     * new Properties object.  
      */
     public static Properties clone( Properties props, Properties defaults, boolean deepClone ) {
         Properties result = null;
@@ -93,65 +87,6 @@ public final class PropertiesUtils {
         putAll(result, props);
         
         return result;
-    }
-
-    /**
-     * This method implements a 'compareTo' logic for two Properties objects,
-     * equivalent to calling <code>p1.compareTo(p2)</code> if the
-     * {@link java.util.Properties Properties} class implemented
-     * {@link java.lang.Comparable Comparable} (which it does not).
-     * @param p1 the first Properties instance to compare; may be null
-     * @param p2 the second Properties instance to compare; may be null
-     * @return a negative integer, zero, or a positive integer as <code>p1</code>
-     *      is less than, equal to, or greater than <code>p2</code>, respectively.
-     */
-    public static int compare( Properties p1, Properties p2 ) {
-        if ( p1 != null ) {
-            if ( p2 == null ) {
-            	return 1;
-            }
-        } else {
-        	if ( p2 != null ) {
-        		return -1;
-        	}
-        	return 0;
-        }
-
-
-        // Compare the number of property values ...
-        int diff = p1.size() - p2.size();
-        if ( diff != 0 ) {
-            return diff;
-        }
-
-        // Iterate through the properties and compare values ...
-        Map.Entry entry = null;
-        Object p1Value = null;
-        Object p2Value = null;
-        Iterator iter = p1.entrySet().iterator();
-        while ( iter.hasNext() ) {
-            entry = (Map.Entry) iter.next();
-            p1Value = entry.getValue();
-            p2Value = p2.get(entry.getKey());
-            if ( p1Value != null ) {
-                if ( p2Value == null ) {
-                    return 1;
-                }
-                if ( p1Value instanceof Comparable ) {
-                    diff = ((Comparable)p1Value).compareTo(p2Value);
-                } else {
-                    diff = p1Value.toString().compareTo(p2Value.toString());
-                }
-                if ( diff != 0 ) {
-                    return diff;
-                }
-            } else {
-                if ( p2Value != null ) {
-                    return -1;
-                }
-            }
-        }
-        return 0;
     }
 
     /**
@@ -211,18 +146,6 @@ public final class PropertiesUtils {
         }
     }
     
-    public static void setOverrideProperies(Properties base, Properties override) {
-        Enumeration overrideEnum = override.propertyNames();
-        while (overrideEnum.hasMoreElements()) {
-            String key = (String)overrideEnum.nextElement();
-            String value = base.getProperty(key);
-            String overRideValue = override.getProperty(key);
-            if (value != null && !value.equals(overRideValue)) {
-                base.setProperty(key, overRideValue);
-            }
-        }
-    }
-
     public static int getIntProperty(Properties props, String propName, int defaultValue) throws InvalidPropertyException {
         String stringVal = props.getProperty(propName);
         if(stringVal == null) {
@@ -296,11 +219,7 @@ public final class PropertiesUtils {
     	if (stringVal.length() == 0) {
     		return defaultValue;
     	}
-        try {
-            return Boolean.valueOf(stringVal);
-        } catch(NumberFormatException e) {
-        	  throw new InvalidPropertyException(CorePlugin.Event.TEIID10041, propName, stringVal, Float.class, e);
-        }
+        return Boolean.valueOf(stringVal);
     }
 
     /**
@@ -380,29 +299,6 @@ public final class PropertiesUtils {
         return configProps;
     }
     
-    public static Properties sort(Properties props) {
-
-        List names = new ArrayList();
-        Enumeration enumeration = props.propertyNames();
-        while ( enumeration.hasMoreElements() ) {
-            String name = (String) enumeration.nextElement();
-            names.add(name);
-        }
-        Collections.sort(names);
-
-        Properties newProps = new Properties();
-        Iterator iter = names.iterator();
-        while ( iter.hasNext() ) {
-            String name = (String) iter.next();
-            String propValue = props.getProperty(name);
-            if ( propValue != null ) {
-                newProps.setProperty(name, propValue);
-            }
-        }
-        return newProps;
-    }
-
-
     /**
      * Write the specified properties to the specified file,
      * with the specified header.  
@@ -501,23 +397,6 @@ public final class PropertiesUtils {
     }
 
     private static final String NEWLINE = "\n"; //$NON-NLS-1$
-    public static String prettyPrint( Properties props ) {
-        if (props != null) {
-            Collection sorted = sortPropertiesForPrinting(props);
-    
-            StringBuffer outBuf = new StringBuffer();
-    
-            for (Iterator it=sorted.iterator(); it.hasNext(); ) {
-                String value = (String) it.next();
-                outBuf.append(value);
-                outBuf.append(NEWLINE);
-            }
-    
-            return outBuf.toString();
-        }
-        return ""; //$NON-NLS-1$
-    }
-
     /**
      * Sorts the properties and returns a collection of entries
      * where each entry can be printed.  Each entry will print in the
@@ -572,14 +451,7 @@ public final class PropertiesUtils {
 
     }
 
-//    private static final String keyValueSeparators = "=: \t\r\n\f";
-
-//    private static final String strictKeyValueSeparators = "=:";
-
     private static final String specialSaveChars = "=: \t\r\n\f#!"; //$NON-NLS-1$
-
-//    private static final String whiteSpaceChars = " \t\r\n\f";
-
 
     /*
      * Converts unicodes to encoded &#92;uxxxx
@@ -659,17 +531,6 @@ public final class PropertiesUtils {
 			sb.append(toHex(b >>> 4));
 			sb.append(toHex(b));
 		}
-    }
-
-    public static final void copyProperty(Properties srcProperties, String srcPropName, Properties tgtProperties, String tgtPropName) {
-        if(srcProperties == null || srcPropName == null || tgtProperties == null || tgtPropName == null) {
-            return;
-        }
-        
-        String value = srcProperties.getProperty(srcPropName);
-        if(value != null) {
-            tgtProperties.setProperty(tgtPropName, value);
-        }
     }
 
     /**
@@ -814,6 +675,49 @@ public final class PropertiesUtils {
 	        } 
 	    }
 	    return caseInsensitive;
+	}
+	
+	/**
+     * Search for the property first in the environment, then in the system properties
+     * @param key
+     * @param defaultValue
+     * @param clazz
+     * @return
+     */
+    public static String getHierarchicalProperty(String key, String defaultValue) {
+        return getHierarchicalProperty(key, defaultValue, String.class);
+    }
+	
+	/**
+	 * Search for the property first in the environment, then in the system properties
+	 * @param key
+	 * @param defaultValue
+	 * @param clazz
+	 * @return
+	 */
+	public static <T> T getHierarchicalProperty(String key, T defaultValue, Class<T> clazz) {
+	    String stringVal = System.getenv(key);
+        if(stringVal != null) {
+            stringVal = stringVal.trim();
+            if (stringVal.length() != 0) {
+                return StringUtil.valueOf(stringVal, clazz);
+            }
+        }
+        stringVal = System.getProperty(key);
+        if(stringVal != null) {
+            stringVal = stringVal.trim();
+            if (stringVal.length() != 0) {
+                return StringUtil.valueOf(stringVal, clazz);
+            }
+        }
+        return defaultValue;
+	}
+	
+	public static Properties getCombinedProperties() {
+	    Properties properties = new Properties();
+        properties.putAll(System.getProperties());
+        properties.putAll(System.getenv());
+        return properties;
 	}
 
 }

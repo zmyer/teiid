@@ -26,6 +26,7 @@ import java.util.Comparator;
 
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.types.GeometryType;
+import org.teiid.language.SQLConstants;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
 import org.teiid.metadata.FunctionMethod;
@@ -101,9 +102,12 @@ public class SystemSource extends UDFSource implements FunctionCategoryConstants
         addBitFunction(SourceSystemFunctions.BITNOT, QueryPlugin.Util.getString("SystemSource.Bitnot_desc"), "bitnot", 1, QueryPlugin.Util.getString("SystemSource.Bitnot_result_desc")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ 
 
         // date
-        addConstantDateFunction(SourceSystemFunctions.CURDATE, QueryPlugin.Util.getString("SystemSource.Curdate_desc"), "currentDate", DataTypeManager.DefaultDataTypes.DATE); //$NON-NLS-1$ //$NON-NLS-2$ 
-        addConstantDateFunction(SourceSystemFunctions.CURTIME, QueryPlugin.Util.getString("SystemSource.Curtime_desc"), "currentTime", DataTypeManager.DefaultDataTypes.TIME); //$NON-NLS-1$ //$NON-NLS-2$ 
-        addConstantDateFunction(SourceSystemFunctions.NOW, QueryPlugin.Util.getString("SystemSource.Now_desc"), "currentTimestamp", DataTypeManager.DefaultDataTypes.TIMESTAMP); //$NON-NLS-1$ //$NON-NLS-2$ 
+        addConstantDateFunction(SourceSystemFunctions.CURDATE, QueryPlugin.Util.getString("SystemSource.Curdate_desc"), "currentDate", DataTypeManager.DefaultDataTypes.DATE, Determinism.COMMAND_DETERMINISTIC); //$NON-NLS-1$ //$NON-NLS-2$ 
+        addConstantDateFunction(SQLConstants.Reserved.CURRENT_DATE, QueryPlugin.Util.getString("SystemSource.Curdate_desc"), "currentDate", DataTypeManager.DefaultDataTypes.DATE, Determinism.COMMAND_DETERMINISTIC); //$NON-NLS-1$ //$NON-NLS-2$
+        addConstantDateFunction(SourceSystemFunctions.CURTIME, QueryPlugin.Util.getString("SystemSource.Curtime_desc"), "currentTime", DataTypeManager.DefaultDataTypes.TIME, Determinism.COMMAND_DETERMINISTIC); //$NON-NLS-1$ //$NON-NLS-2$ 
+        addConstantDateFunction(SQLConstants.Reserved.CURRENT_TIME, QueryPlugin.Util.getString("SystemSource.Curtime_desc"), "currentTime", DataTypeManager.DefaultDataTypes.TIME, Determinism.COMMAND_DETERMINISTIC); //$NON-NLS-1$ //$NON-NLS-2$
+        addConstantDateFunction(SourceSystemFunctions.NOW, QueryPlugin.Util.getString("SystemSource.Now_desc"), "currentTimestamp", DataTypeManager.DefaultDataTypes.TIMESTAMP, Determinism.INSTRUCTION_DETERMINISTIC); //$NON-NLS-1$ //$NON-NLS-2$
+        addConstantDateFunction(SQLConstants.Reserved.CURRENT_TIMESTAMP, QueryPlugin.Util.getString("SystemSource.Now_desc"), "currentTimestamp", DataTypeManager.DefaultDataTypes.TIMESTAMP, Determinism.INSTRUCTION_DETERMINISTIC); //$NON-NLS-1$ //$NON-NLS-2$
         addDateFunction(SourceSystemFunctions.DAYNAME, "dayName", QueryPlugin.Util.getString("SystemSource.Dayname_result_d_desc"), QueryPlugin.Util.getString("SystemSource.Dayname_result_ts_desc"), DataTypeManager.DefaultDataTypes.STRING); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ 
         addDateFunction(SourceSystemFunctions.DAYOFMONTH, "dayOfMonth", QueryPlugin.Util.getString("SystemSource.Dayofmonth_result_d_desc"), QueryPlugin.Util.getString("SystemSource.Dayofmonth_result_ts_desc"), DataTypeManager.DefaultDataTypes.INTEGER); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ 
         addDateFunction(SourceSystemFunctions.DAYOFWEEK, "dayOfWeek", QueryPlugin.Util.getString("SystemSource.Dayofweek_result_d_desc"), QueryPlugin.Util.getString("SystemSource.Dayofweek_result_ts_desc"), DataTypeManager.DefaultDataTypes.INTEGER); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ 
@@ -123,6 +127,8 @@ public class SystemSource extends UDFSource implements FunctionCategoryConstants
 		                  
         // string
         addStringFunction(SourceSystemFunctions.LENGTH, QueryPlugin.Util.getString("SystemSource.Length_result"), "length", DataTypeManager.DefaultDataTypes.INTEGER); //$NON-NLS-1$ //$NON-NLS-2$ 
+        addStringFunction("character_length", QueryPlugin.Util.getString("SystemSource.Length_result"), "length", DataTypeManager.DefaultDataTypes.INTEGER); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        addStringFunction("char_length", QueryPlugin.Util.getString("SystemSource.Length_result"), "length", DataTypeManager.DefaultDataTypes.INTEGER); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         addStringFunction(SourceSystemFunctions.UCASE, QueryPlugin.Util.getString("SystemSource.Ucase_result"), "upperCase", DataTypeManager.DefaultDataTypes.STRING); //$NON-NLS-1$ //$NON-NLS-2$ 
         addStringFunction(SourceSystemFunctions.LCASE, QueryPlugin.Util.getString("SystemSource.Lcase_result"), "lowerCase", DataTypeManager.DefaultDataTypes.STRING); //$NON-NLS-1$ //$NON-NLS-2$ 
 		addStringFunction("lower", QueryPlugin.Util.getString("SystemSource.Lower_result"), "lowerCase", DataTypeManager.DefaultDataTypes.STRING); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -502,11 +508,11 @@ public class SystemSource extends UDFSource implements FunctionCategoryConstants
      * Date functions a marked as command deterministic, since we prefer pre-evaluation rather than row-by-row
      * evaluation.
      */
-    private void addConstantDateFunction(String name, String description, String methodName, String returnType) {
+    private void addConstantDateFunction(String name, String description, String methodName, String returnType, Determinism determinism) {
         FunctionMethod method = new FunctionMethod(name, description, DATETIME, FUNCTION_CLASS, methodName,
                 new FunctionParameter[] {},
                 new FunctionParameter("result", returnType, description));                 //$NON-NLS-1$
-        method.setDeterminism(Determinism.COMMAND_DETERMINISTIC);
+        method.setDeterminism(determinism);
         functions.add(method);
     }
 
@@ -556,6 +562,13 @@ public class SystemSource extends UDFSource implements FunctionCategoryConstants
 					new FunctionParameter("count", DataTypeManager.DefaultDataTypes.INTEGER, QueryPlugin.Util.getString("SystemSource.Timestampadd_ts_arg2")),  //$NON-NLS-1$ //$NON-NLS-2$
 					new FunctionParameter("timestamp", DataTypeManager.DefaultDataTypes.TIMESTAMP, QueryPlugin.Util.getString("SystemSource.Timestampadd_ts_arg3"))}, //$NON-NLS-1$ //$NON-NLS-2$
 				new FunctionParameter("result", DataTypeManager.DefaultDataTypes.TIMESTAMP, QueryPlugin.Util.getString("SystemSource.Timestampadd_ts_result")) ) );			                //$NON-NLS-1$ //$NON-NLS-2$
+		functions.add(
+            new FunctionMethod(SourceSystemFunctions.TIMESTAMPADD, QueryPlugin.Util.getString("SystemSource.Timestampadd_ts_desc"), DATETIME, FUNCTION_CLASS, "timestampAdd", //$NON-NLS-1$ //$NON-NLS-2$ 
+                new FunctionParameter[] {
+                    new FunctionParameter("interval", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.Timestampadd_ts_arg1")),  //$NON-NLS-1$ //$NON-NLS-2$
+                    new FunctionParameter("count", DataTypeManager.DefaultDataTypes.LONG, QueryPlugin.Util.getString("SystemSource.Timestampadd_ts_arg2")),  //$NON-NLS-1$ //$NON-NLS-2$
+                    new FunctionParameter("timestamp", DataTypeManager.DefaultDataTypes.TIMESTAMP, QueryPlugin.Util.getString("SystemSource.Timestampadd_ts_arg3"))}, //$NON-NLS-1$ //$NON-NLS-2$
+                new FunctionParameter("result", DataTypeManager.DefaultDataTypes.TIMESTAMP, QueryPlugin.Util.getString("SystemSource.Timestampadd_ts_result")) ) );                         //$NON-NLS-1$ //$NON-NLS-2$
 	}
 
     private void addTimestampDiffFunction() {
@@ -879,6 +892,18 @@ public class SystemSource extends UDFSource implements FunctionCategoryConstants
                     new FunctionParameter("variablename", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.Env_varname")) //$NON-NLS-1$ //$NON-NLS-2$
                      ),
                 new FunctionParameter("result", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.Env_result")), true, Determinism.DETERMINISTIC ) );                     //$NON-NLS-1$ //$NON-NLS-2$
+        functions.add(
+                new FunctionMethod("sys_prop", QueryPlugin.Util.getString("SystemSource.Env_desc"), MISCELLANEOUS, PushDown.CANNOT_PUSHDOWN, FUNCTION_CLASS, "sys_prop", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    Arrays.asList(
+                        new FunctionParameter("variablename", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.Env_varname")) //$NON-NLS-1$ //$NON-NLS-2$
+                         ),
+                    new FunctionParameter("result", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.Env_result")), true, Determinism.DETERMINISTIC ) );                     //$NON-NLS-1$ //$NON-NLS-2$
+        functions.add(
+                new FunctionMethod("env_var", QueryPlugin.Util.getString("SystemSource.env_var_desc"), MISCELLANEOUS, PushDown.CANNOT_PUSHDOWN, FUNCTION_CLASS, "env_var", //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    Arrays.asList(
+                        new FunctionParameter("variablename", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.env_var_param1")) //$NON-NLS-1$ //$NON-NLS-2$
+                         ),
+                    new FunctionParameter("result", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.env_var_result")), true, Determinism.DETERMINISTIC ) );                     //$NON-NLS-1$ //$NON-NLS-2$
     }
     
     private void addSessionIdFunction() {

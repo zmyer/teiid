@@ -17,8 +17,7 @@
  */
 package org.teiid.translator.mongodb;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.Assert.*;
 
 import java.util.Arrays;
 
@@ -36,6 +35,7 @@ import org.teiid.language.Command;
 import org.teiid.mongodb.MongoDBConnection;
 import org.teiid.query.metadata.TransformationMetadata;
 import org.teiid.query.unittest.RealMetadataFactory;
+import org.teiid.query.unittest.TimestampUtil;
 import org.teiid.translator.Execution;
 import org.teiid.translator.ExecutionContext;
 
@@ -204,4 +204,53 @@ public class TestEmbeddedMongoExecution {
     	
     	client.close();
     }    
+    
+    @Test
+    public void testTimeFunction() throws Exception {
+        executeCmd("delete from TIME_TEST");       
+        executeCmd("insert into TIME_TEST (e1) values (0)"); //missing
+        executeCmd("insert into TIME_TEST (e1, e2) values (1, null)"); //null
+        MongoDBQueryExecution exec = (MongoDBQueryExecution)executeCmd("select * from TIME_TEST where YEAR(e2) = 1");
+        assertNull(exec.next());
+        
+        executeCmd("insert into TIME_TEST (e1, e2) values (2, '2001-01-01 01:02:03')");
+        
+        exec = (MongoDBQueryExecution)executeCmd("SELECT e2, second(e2) as sec FROM TIME_TEST WHERE second(e2) >= 0");
+        assertEquals(Arrays.asList(TimestampUtil.createTimestamp(101, 0, 1, 1, 2, 3, 0), 3), exec.next());
+        
+        exec = (MongoDBQueryExecution)executeCmd("SELECT e1, e2, second(e2) as sec FROM TIME_TEST");
+        assertEquals(Arrays.asList(0, null, null), exec.next());
+        assertEquals(Arrays.asList(1, null, null), exec.next());
+        assertEquals(Arrays.asList(2, TimestampUtil.createTimestamp(101, 0, 1, 1, 2, 3, 0), 3), exec.next());
+        
+        client.close();
+    }
+    
+    @Test
+    public void testGroupByHaving() throws Exception {
+        executeCmd("delete from TIME_TEST");       
+        executeCmd("insert into TIME_TEST (e1, e2) values (1, null)");
+        executeCmd("insert into TIME_TEST (e1, e2) values (2, null)");
+        String sql = "SELECT max(e1), e2, count(*) FROM TIME_TEST GROUP BY e2 HAVING count(*) = 2";
+                
+        MongoDBQueryExecution exec = (MongoDBQueryExecution)executeCmd(sql);
+        assertEquals(Arrays.asList(2, null, 2), exec.next());
+        assertNull(exec.next());
+        
+        sql = "SELECT min(e1), e2 FROM TIME_TEST GROUP BY e2 HAVING count(*) = 2";
+        
+        exec = (MongoDBQueryExecution)executeCmd(sql);
+        assertEquals(Arrays.asList(1, null), exec.next());
+        assertNull(exec.next());
+        
+        //won't work as it requires a secondary projection
+        sql = "SELECT min(e1)+1, e2 FROM TIME_TEST GROUP BY e2";
+        
+        /*exec = (MongoDBQueryExecution)executeCmd(sql);
+        assertEquals(Arrays.asList(1), exec.next());
+        assertEquals(Arrays.asList(1, null), exec.next());
+        assertNull(exec.next());*/
+        
+        client.close();
+    }
 }

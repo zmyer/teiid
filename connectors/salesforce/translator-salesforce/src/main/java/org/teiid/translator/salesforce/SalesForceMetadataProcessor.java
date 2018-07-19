@@ -45,6 +45,7 @@ import org.teiid.translator.TranslatorException;
 import org.teiid.translator.TranslatorProperty;
 import org.teiid.translator.TranslatorProperty.PropertyType;
 import org.teiid.translator.TypeFacility;
+import org.teiid.util.FullyQualifiedName;
 
 import com.sforce.soap.partner.ChildRelationship;
 import com.sforce.soap.partner.DescribeGlobalResult;
@@ -248,7 +249,7 @@ public class SalesForceMetadataProcessor implements MetadataProcessor<Salesforce
 				String name = "FK_" + parent.getName() + "_" + col.getName();//$NON-NLS-1$ //$NON-NLS-2$
 				ArrayList<String> columnNames = new ArrayList<String>();
 				columnNames.add(col.getName());	
-				ForeignKey fk = metadataFactory.addForiegnKey(name, columnNames, parent.getName(), child);
+				ForeignKey fk = metadataFactory.addForeignKey(name, columnNames, parent.getName(), child);
 				fk.setNameInSource(relationship.getRelationshipName()); //TODO: only needed for custom relationships
 			}
 		}
@@ -275,7 +276,8 @@ public class SalesForceMetadataProcessor implements MetadataProcessor<Salesforce
 		    return;
 		}
 		Table table = metadataFactory.addTable(name);
-		
+		FullyQualifiedName fqn = new FullyQualifiedName("sobject", objectMetadata.getName()); //$NON-NLS-1$
+		table.setProperty(FQN, fqn.toString());
 		table.setNameInSource(objectMetadata.getName());
 		tableMap.put(objectMetadata.getName(), table);
 		

@@ -192,7 +192,7 @@ public class IntegrationTestDeployment {
 	@Test
 	public void testTraslators() throws Exception {
 		Collection<? extends Translator> translators = admin.getTranslators();
-		assertEquals(translators.toString(), 60, translators.size());
+		assertEquals(translators.toString(), 62, translators.size());
 
 		JavaArchive jar = getLoopyArchive();
 		
@@ -217,7 +217,7 @@ public class IntegrationTestDeployment {
         assertEquals(20, props.size());
         
         props = admin.getTranslatorPropertyDefinitions("accumulo", TranlatorPropertyType.EXTENSION_METADATA);
-        assertEquals(3, props.size());
+        assertEquals(4, props.size());
         for (PropertyDefinition p: props) {
             if (p.getName().equals("{http://www.teiid.org/translator/accumulo/2013}CF")) {
                 assertEquals("org.teiid.metadata.Column", p.getPropertyValue("owner"));
@@ -225,7 +225,7 @@ public class IntegrationTestDeployment {
         }
 
         props = admin.getTranslatorPropertyDefinitions("accumulo", TranlatorPropertyType.IMPORT);
-        assertEquals(2, props.size());
+        assertEquals(8, props.size());
         for (PropertyDefinition p: props) {
             if (p.getName().equals("importer.ColumnNamePattern")) {
                 assertEquals("java.lang.String", p.getPropertyTypeClassName());

@@ -20,9 +20,9 @@ package org.teiid.translator.odata4;
 import static org.teiid.language.SQLConstants.Reserved.*;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 import org.apache.olingo.commons.api.edm.EdmPrimitiveTypeException;
 import org.teiid.language.*;
@@ -42,9 +42,10 @@ import org.teiid.translator.TranslatorException;
  */
 public class ODataFilterVisitor extends HierarchyVisitor {
 
-    private static Map<String, String> infixFunctions = new HashMap<String, String>();
+    private static Map<String, String> infixFunctions = new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
     static {
         infixFunctions.put("%", "mod");//$NON-NLS-1$ //$NON-NLS-2$
+        infixFunctions.put("mod", "mod");//$NON-NLS-1$ //$NON-NLS-2$
         infixFunctions.put("+", "add");//$NON-NLS-1$ //$NON-NLS-2$
         infixFunctions.put("-", "sub");//$NON-NLS-1$ //$NON-NLS-2$
         infixFunctions.put("*", "mul");//$NON-NLS-1$ //$NON-NLS-2$
@@ -115,6 +116,10 @@ public class ODataFilterVisitor extends HierarchyVisitor {
         } else {
             currentExpression = null;
         }
+        //we are really looking for the native type, if it's not set then don't bother
+        if (currentExpression != null && currentExpression.getNativeType() == null) {
+            currentExpression = null;
+        }
         return old;
     }
 
@@ -124,16 +129,10 @@ public class ODataFilterVisitor extends HierarchyVisitor {
 
     @Override
     public void visit(IsNull obj) {
-        if (obj.isNegated()) {
-            this.filter.append(NOT.toLowerCase()).append(Tokens.LPAREN);
-        }
         appendNested(obj.getExpression());
         this.filter.append(Tokens.SPACE);
-        this.filter.append("eq").append(Tokens.SPACE); //$NON-NLS-1$
+        this.filter.append(obj.isNegated()?"ne":"eq").append(Tokens.SPACE); //$NON-NLS-1$ //$NON-NLS-2$
         this.filter.append(NULL.toLowerCase());
-        if (obj.isNegated()) {
-            this.filter.append(Tokens.RPAREN);
-        }
     }
 
     private void appendNested(Expression ex) {
@@ -227,7 +226,10 @@ public class ODataFilterVisitor extends HierarchyVisitor {
     @Override
     public void visit(Function obj) {
         if (this.ef.getFunctionModifiers().containsKey(obj.getName())) {
-            this.ef.getFunctionModifiers().get(obj.getName()).translate(obj);
+            List<?> parts = this.ef.getFunctionModifiers().get(obj.getName()).translate(obj);
+            if (parts != null) {
+                throw new AssertionError("not supported"); //$NON-NLS-1$
+            }
         }
 
         String name = obj.getName();
@@ -282,19 +284,6 @@ public class ODataFilterVisitor extends HierarchyVisitor {
             this.filter.append(Tokens.RPAREN);
         }
     }
-    public void visit(In obj) {
-        for (int i = 0; i < obj.getRightExpressions().size(); i++) {
-            Expression expr = obj.getRightExpressions().get(i);
-            if (i != 0) {
-                this.filter.append(" or ");
-            }
-            visitNode(obj.getLeftExpression());   
-            this.filter.append(" eq ");
-            BaseColumn old = setCurrentExpression(obj.getLeftExpression());
-            visitNode(expr);
-            this.currentExpression = old;
-        }
-    }   
 
     @Override
     public void visit(Literal obj) {

@@ -43,6 +43,7 @@ import org.teiid.core.types.BlobType;
 import org.teiid.core.types.ClobType;
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.types.GeometryType;
+import org.teiid.core.util.PropertiesUtils;
 import org.teiid.core.util.StringUtil;
 import org.teiid.jdbc.TeiidSQLException;
 import org.teiid.language.SQLConstants;
@@ -71,7 +72,7 @@ public class PgCatalogMetadataStore extends MetadataFactory {
 	
 	public static final String POSTGIS_LIB_VERSION = "2.0.0 USE_GEOS=0 USE_PROJ=1 USE_STATS=0"; //$NON-NLS-1$
 	
-	public static final String POSTGRESQL_VERSION = System.getProperties().getProperty("org.teiid.pgVersion", "PostgreSQL 8.2"); //$NON-NLS-1$ //$NON-NLS-2$
+	public static final String POSTGRESQL_VERSION = PropertiesUtils.getHierarchicalProperty("org.teiid.pgVersion", "PostgreSQL 8.2"); //$NON-NLS-1$ //$NON-NLS-2$
 
 	public static final String TYPMOD = "(CASE WHEN (t1.DataType = 'bigdecimal' OR t1.DataType = 'biginteger') THEN 4+(65536*(case when (t1.Precision>32767) then 32767 else t1.Precision end)+(case when (t1.Scale>32767) then 32767 else t1.Scale end)) " + //$NON-NLS-1$
 				"WHEN (t1.DataType = 'string' OR t1.DataType = 'char') THEN (CASE WHEN (t1.Length <= 2147483643) THEN 4+ t1.Length ELSE 2147483647 END) ELSE -1 END)"; //$NON-NLS-1$
@@ -96,6 +97,15 @@ public class PgCatalogMetadataStore extends MetadataFactory {
 		add_pg_stats();
 		add_geography_columns();
 		add_pg_constraint();
+		
+		//limited emulation of information_schema
+		add_infoSchemaTables();
+		add_infoSchemaViews();
+		add_infoSchemaColumns();
+		add_infoSchemaReferentialConstraints();
+		add_infoSchemaKeyColumnUsage();
+		add_infoSchemaTableConstraints();
+		
 		addFunction("regClass", "regclass").setNullOnNull(true); //$NON-NLS-1$ //$NON-NLS-2$
 		addFunction("encode", "encode").setPushdown(PushDown.CAN_PUSHDOWN); //$NON-NLS-1$ //$NON-NLS-2$
 		addFunction("objDescription", "obj_description"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -585,9 +595,10 @@ public class PgCatalogMetadataStore extends MetadataFactory {
 			+ "typelem, null as typinput, 2147483647 - row_number() over (order by typname) as typreceive, null as typdfault, teiid_name from texttable('" + //$NON-NLS-1$
 			"16,bool,1,b,0,-1,0,0,boolean\n" + //$NON-NLS-1$
 			"17,bytea,-1,b,0,-1,0,0,blob\n" + //$NON-NLS-1$
+			"18,char,1,b,0,-1,0,0,\n" + //$NON-NLS-1$
 			"1043,varchar,-1,b,0,-1,0,0,string\n" + //$NON-NLS-1$
 			"25,text,-1,b,0,-1,0,0,clob\n" + //$NON-NLS-1$
-			"1042,char,1,b,0,-1,0,0,\n" + //$NON-NLS-1$
+			"1042,bpchar,-1,b,0,-1,0,0,\n" + //$NON-NLS-1$
 			"21,int2,2,b,0,-1,0,0,short\n" + //$NON-NLS-1$
 			"20,int8,8,b,0,-1,0,0,long\n" + //$NON-NLS-1$
 			"23,int4,4,b,0,-1,0,0,integer\n" + //$NON-NLS-1$
@@ -689,19 +700,124 @@ public class PgCatalogMetadataStore extends MetadataFactory {
 		addPrimaryKey("matpg_datatype_names", Arrays.asList("oid", "name"), t); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ 
 		addIndex("matpg_datatype_ids", true, Arrays.asList("typname", "oid"), t); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ 
 		String transformation = "select pt.oid as oid, pt.typname as typname, pt.teiid_name as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt" //$NON-NLS-1$
-				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'char' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='varchar'" //$NON-NLS-1$
+				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'char' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='bpchar'" //$NON-NLS-1$
 				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'byte' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='int2'" //$NON-NLS-1$
 				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'biginteger' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='numeric'"  //$NON-NLS-1$
 				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'varbinary' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='bytea'"  //$NON-NLS-1$
 				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'byte[]' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='_int2'" //$NON-NLS-1$
 				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'biginteger[]' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='_numeric'"  //$NON-NLS-1$
 				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'varbinary[]' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='_bytea'"  //$NON-NLS-1$
-				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'char[]' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='_varchar'"; //$NON-NLS-1$
+				+ " UNION ALL select pt.oid as oid, pt.typname as typname, 'char[]' as name, pt.typlen, pt.typtype, pt.typbasetype, pt.typtypmod from pg_catalog.pg_type pt where typname='_bpchar'"; //$NON-NLS-1$
 		t.setSelectTransformation(transformation);
 		t.setMaterialized(true);
 		t.setProperty(MaterializationMetadataRepository.ALLOW_MATVIEW_MANAGEMENT, "true"); //$NON-NLS-1$
 		return t;
 	}	
+	
+	private Table add_infoSchemaViews() {
+	    Table t = createView("information_schema.views"); //$NON-NLS-1$ 
+        addColumn("table_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("table_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("table_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("check_option", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("is_updatable", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        t.setSelectTransformation("select vdbname, schemaName, name, 'NONE', case when SupportsUpdates then 'YES' else 'NO' end from sys.tables where IsPhysical"); //$NON-NLS-1$
+        return t;
+	}
+	
+    private Table add_infoSchemaTables() {
+        Table t = createView("information_schema.tables"); //$NON-NLS-1$ 
+        addColumn("table_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("table_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("table_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("table_type", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        t.setSelectTransformation("select vdbname, schemaName, name," + //$NON-NLS-1$
+                " case when IsSystem then 'SYSTEM ' else '' end || case when IsPhysical then 'BASE TABLE' else 'VIEW' end from sys.tables"); //$NON-NLS-1$
+        return t;
+    }
+    
+    private Table add_infoSchemaColumns() {
+        Table t = createView("information_schema.columns"); //$NON-NLS-1$ 
+        addColumn("table_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("table_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("table_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("column_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("ordinal_position", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        addColumn("column_default", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("is_nullable", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("udt_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("data_type", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("character_maximum_length", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        addColumn("character_octet_length", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        addColumn("numeric_precision", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        addColumn("numeric_precision_radix", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        addColumn("numeric_scale", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        addColumn("datetime_precision", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        addColumn("character_set_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("character_set_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("character_set_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("collation_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("is_updatable", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        t.setSelectTransformation("select vdbname, schemaName, tableName, columns.name, position, defaultValue," + //$NON-NLS-1$ 
+                " case when NullType = 'No Nulls' then 'NO' else 'YES' end," + //$NON-NLS-1$
+                " typname, case WHEN endswith(']', columns.DataType) then 'ARRAY' else pg_catalog.format_type( pt.oid, 0) end, case WHEN columns.DataType in ('string', 'char') THEN columns.length end, null," + //$NON-NLS-1$
+                " CASE WHEN columns.DataType in ('bigdecimal', 'biginteger') then columns.precision WHEN columns.DataType = 'float' then 24 WHEN columns.DataType = 'double' then 53 WHEN columns.DataType in ('byte', 'short', 'integer', 'long') then pt.typlen * 8 end," + //$NON-NLS-1$
+                " CASE WHEN columns.DataType in ('bigdecimal', 'biginteger', 'float', 'double', 'byte', 'short', 'integer', 'long') then 2 end, " + //$NON-NLS-1$
+                " CASE WHEN columns.DataType in ('bigdecimal', 'biginteger') then columns.scale WHEN columns.DataType in ('byte', 'short', 'integer', 'long') then 0 end," + //$NON-NLS-1$
+                " CASE WHEN columns.DataType = 'date' then 0 WHEN columns.DataType = 'time' then 3 WHEN columns.DataType = 'timestamp' then 9 end," + //$NON-NLS-1$
+                " null, null, null, null," + //$NON-NLS-1$
+                " case when SupportsUpdates then 'YES' else 'NO' end " + //$NON-NLS-1$
+                " from sys.columns left outer join pg_catalog.matpg_datatype pt ON columns.DataType = pt.Name"); //$NON-NLS-1$
+        return t;
+    }
+    
+    private Table add_infoSchemaReferentialConstraints() {
+        Table t = createView("information_schema.referential_constraints"); //$NON-NLS-1$ 
+        addColumn("constraint_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("constraint_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("constraint_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("unique_constraint_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("unique_constraint_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("unique_constraint_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("match_option", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("update_rule", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("delete_rule", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        t.setSelectTransformation("select PKTABLE_CAT, PKTABLE_SCHEM, PK_NAME, FKTABLE_CAT, FKTABLE_SCHEM, FK_NAME, 'NONE', 'NO ACTION', 'NO ACTION' FROM SYS.ReferenceKeyColumns " //$NON-NLS-1$
+                + "group by PKTABLE_CAT, PKTABLE_SCHEM, PKTABLE_NAME, FKTABLE_CAT, FKTABLE_SCHEM, FKTABLE_NAME, FK_NAME, PK_NAME"); //$NON-NLS-1$
+        return t;
+    }
+    
+    private Table add_infoSchemaKeyColumnUsage() {
+        Table t = createView("information_schema.key_column_usage"); //$NON-NLS-1$ 
+        addColumn("constraint_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("constraint_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("constraint_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("table_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("table_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("table_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("column_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("ordinal_position", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        addColumn("position_in_unique_constraint", DataTypeManager.DefaultDataTypes.INTEGER, t); //$NON-NLS-1$
+        t.setSelectTransformation("select VDBName, SchemaName, KeyName, VDBName, SchemaName, TableName, Name, KeyColumns.Position, case when RefKeyUID is not null then KeyColumns.Position end " //$NON-NLS-1$
+                + "FROM SYS.KeyColumns"); //$NON-NLS-1$
+        return t;
+    }
+    
+    private Table add_infoSchemaTableConstraints() {
+        Table t = createView("information_schema.table_constraints"); //$NON-NLS-1$ 
+        addColumn("constraint_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("constraint_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("constraint_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("table_catalog", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("table_schema", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$ 
+        addColumn("table_name", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("constraint_type", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("is_deferrable", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        addColumn("initially_deferred", DataTypeManager.DefaultDataTypes.STRING, t); //$NON-NLS-1$
+        t.setSelectTransformation("select VDBName, SchemaName, Name, VDBName, SchemaName, TableName, upper(Keys.Type || case when Keys.Type in ('Primary', 'Foreign') then ' Key' else '' end), 'NO', 'NO' " //$NON-NLS-1$
+                + "FROM SYS.Keys where Keys.Type in ('Primary', 'Foreign', 'Unique')"); //$NON-NLS-1$
+        return t;
+    }
 	
 	private FunctionMethod addFunction(String javaFunction, String name) {
 		Method[] methods = FunctionMethods.class.getMethods();
@@ -847,11 +963,14 @@ public class PgCatalogMetadataStore extends MetadataFactory {
                     case "float8": //$NON-NLS-1$
                         name = "double precision"; //$NON-NLS-1$
                         break;
+                    case "bpchar": //$NON-NLS-1$
+                        name = "character"; //$NON-NLS-1$
+                        break;
                     }
                     if (typmod > 4) {
                         if (name.equals("numeric")) {  //$NON-NLS-1$
                             name += "("+((typmod-4)>>16)+","+((typmod-4)&0xffff)+")";  //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-                        } else if (name.equals("bpchar") || name.equals("varchar")) { //$NON-NLS-1$ //$NON-NLS-2$
+                        } else if (name.equals("character") || name.equals("varchar")) { //$NON-NLS-1$ //$NON-NLS-2$
                             name += "("+(typmod-4)+")";  //$NON-NLS-1$ //$NON-NLS-2$
                         }
                     }

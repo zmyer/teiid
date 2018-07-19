@@ -479,7 +479,7 @@ public class PlanToProcessConverter {
 	                    	aNode.minimizeProject(command);
 	                    }
 	                    //check if valid to share this with other nodes
-	                    if (ev != null && ev.getDeterminismLevel().compareTo(Determinism.COMMAND_DETERMINISTIC) >= 0 && command.areResultsCachable()) {
+	                    if (ev != null && ev.getDeterminismLevel().compareTo(Determinism.INSTRUCTION_DETERMINISTIC) >= 0 && command.areResultsCachable()) {
 	                    	checkForSharedSourceCommand(aNode, node);
 	                    }
                     }
@@ -516,6 +516,16 @@ public class PlanToProcessConverter {
 				selnode.setCriteria(crit);
 				//in case the parent was a source
 				selnode.setProjectedExpressions((List<Expression>) node.getProperty(NodeConstants.Info.PROJECT_COLS));
+				//there's a chance that we have positional references that can be pre-evaluated
+				boolean postitional = false;
+				for (Reference ref : ReferenceCollectorVisitor.getReferences(crit)) {
+				    if (ref.isPositional()) {
+				        postitional = true;
+				        break;
+				    }
+				}
+                selnode.setShouldEvaluateExpressions(postitional);
+
 				processNode = selnode;
                 
 				break;

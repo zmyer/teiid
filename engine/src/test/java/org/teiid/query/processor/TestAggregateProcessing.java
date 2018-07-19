@@ -31,8 +31,10 @@ import java.util.List;
 import org.junit.Test;
 import org.teiid.UserDefinedAggregate;
 import org.teiid.api.exception.query.FunctionExecutionException;
+import org.teiid.api.exception.query.QueryMetadataException;
 import org.teiid.common.buffer.BufferManagerFactory;
 import org.teiid.common.buffer.impl.BufferManagerImpl;
+import org.teiid.core.TeiidComponentException;
 import org.teiid.core.types.ArrayImpl;
 import org.teiid.core.types.BinaryType;
 import org.teiid.core.types.ClobImpl;
@@ -468,7 +470,7 @@ public class TestAggregateProcessing {
         dataManager.addData("SELECT DISTINCT g_0.e4 AS c_0 FROM pm2.g1 AS g_0 ORDER BY c_0", Arrays.asList(1.0));
         dataManager.addData("SELECT DISTINCT g_0.e1 AS c_0, g_0.e3 AS c_1 FROM pm1.g1 AS g_0 ORDER BY c_0", Arrays.asList("a", false));
         dataManager.addData("SELECT DISTINCT g_0.e1 AS c_0, g_0.e2 AS c_1, g_0.e3 AS c_2, g_0.e4 AS c_3 FROM pm1.g2 AS g_0 ORDER BY c_0", Arrays.asList("a", 1, false, 1.0));
-        dataManager.addData("SELECT v_0.c_0, v_0.c_1, v_0.c_2, MAX(v_0.c_3) AS c_3 FROM (SELECT g_0.e2 AS c_0, convert(g_0.e3, string) AS c_1, g_0.e3 AS c_2, g_0.e4 AS c_3 FROM pm1.g3 AS g_0) AS v_0 WHERE v_0.c_2 = FALSE GROUP BY v_0.c_0, v_0.c_1, v_0.c_2 ORDER BY v_0.c_0, v_0.c_1");
+        dataManager.addData("SELECT v_0.c_0, v_0.c_1, v_0.c_2, MAX(v_0.c_3) AS c_3 FROM (SELECT g_0.e2 AS c_0, convert(g_0.e3, string) AS c_1, g_0.e3 AS c_2, g_0.e4 AS c_3 FROM pm1.g3 AS g_0) AS v_0 GROUP BY v_0.c_0, v_0.c_1, v_0.c_2 ORDER BY c_0, c_1");
         //dataManager.addData("SELECT g_0.e2, convert(g_0.e3, string), g_0.e3, g_0.e4 FROM pm1.g3 AS g_0 WHERE g_0.e3 = FALSE", Arrays.asList(1, "false", false, 1.0));
 
         CommandContext cc = createCommandContext();
@@ -1103,10 +1105,10 @@ public class TestAggregateProcessing {
 
 		HardcodedDataManager dataManager = new HardcodedDataManager(RealMetadataFactory.example1Cached());
 		dataManager.addData("SELECT g_0.e3 AS c_0 FROM g2 AS g_0 ORDER BY c_0", new List[] {
-				Arrays.asList(1.0),
+				Arrays.asList(Boolean.FALSE),
 		});
-		dataManager.addData("SELECT v_0.c_0, v_0.c_1, COUNT(v_0.c_2) FROM (SELECT g_0.e3 AS c_0, ifnull(g_0.e1, '') AS c_1, g_0.e2 AS c_2 FROM g1 AS g_0) AS v_0 WHERE v_0.c_0 = 1.0 GROUP BY v_0.c_0, v_0.c_1", new List[] {
-				Arrays.asList(1.0, "a", 1)
+		dataManager.addData("SELECT v_0.c_0, v_0.c_1, COUNT(v_0.c_2) FROM (SELECT g_0.e3 AS c_0, ifnull(g_0.e1, '') AS c_1, g_0.e2 AS c_2 FROM g1 AS g_0) AS v_0 WHERE v_0.c_0 = FALSE GROUP BY v_0.c_0, v_0.c_1", new List[] {
+				Arrays.asList(Boolean.FALSE, "a", 1)
 		});
 		BasicSourceCapabilities capabilities = TestAggregatePushdown.getAggregateCapabilities();
 		capabilities.setFunctionSupport("ifnull", true);
@@ -1385,6 +1387,30 @@ public class TestAggregateProcessing {
         
         TestProcessor.helpProcess(plan, TestProcessor.createCommandContext(),
                 hdm, new List<?>[] {Arrays.asList("wrong")});
+    }
+    
+    @Test public void testSumLiteralOverJoin() {
+        String sql = "select sum(2) from pm1.g1 a full outer join pm1.g2 b on a.e1 = b.e1"; //$NON-NLS-1$
+
+        ProcessorPlan plan = helpGetPlan(sql, RealMetadataFactory.example1Cached());
+        HardcodedDataManager hdm = new HardcodedDataManager();
+        hdm.addData("SELECT pm1.g1.e1 FROM pm1.g1", Arrays.asList("a"));
+        hdm.addData("SELECT pm1.g2.e1 FROM pm1.g2", Arrays.asList("b"));
+        
+        helpProcess(plan, hdm, new List[] {Arrays.asList(4l)});
+    }
+    
+    @Test public void testAvgLiteralOverJoin() throws QueryMetadataException, TeiidComponentException {
+        String sql = "select avg(2) from pm1.g1 a left outer join pm1.g2 b on a.e1 = b.e1"; //$NON-NLS-1$
+
+        TransformationMetadata metadata = RealMetadataFactory.example1();
+        RealMetadataFactory.setCardinality("pm1.g1", 500, metadata);
+        RealMetadataFactory.setCardinality("pm1.g2", 1000, metadata);
+        ProcessorPlan plan = helpGetPlan(sql, metadata);
+        HardcodedDataManager hdm = new HardcodedDataManager();
+        hdm.addData("SELECT pm1.g1.e1 FROM pm1.g1", Arrays.asList("a"));
+        hdm.addData("SELECT pm1.g2.e1 FROM pm1.g2", Arrays.asList("b"));
+        helpProcess(plan, hdm, new List[] {Arrays.asList(BigDecimal.valueOf(2))});
     }
     
 }

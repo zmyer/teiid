@@ -290,7 +290,10 @@ public class ValidationVisitor extends AbstractValidationVisitor {
 	}
 
     public void visit(Function obj) {
-        if (!this.getMetadata().isEnvAllowed() && obj.getName().equalsIgnoreCase(FunctionLibrary.ENV)) {
+        if (!this.getMetadata().isEnvAllowed() 
+                && (obj.getName().equalsIgnoreCase(FunctionLibrary.ENV)
+                || obj.getName().equalsIgnoreCase(FunctionLibrary.SYS_PROP)
+                || obj.getName().equalsIgnoreCase(FunctionLibrary.ENV_VAR))) {
             handleValidationError(QueryPlugin.Util.getString("ValidationVisitor.env_not_allowed", obj, obj.getName()), obj); //$NON-NLS-1$
         } else if(FunctionLibrary.LOOKUP.equalsIgnoreCase(obj.getName())) {
     		try {
@@ -986,7 +989,7 @@ public class ValidationVisitor extends AbstractValidationVisitor {
         		handleValidationError(QueryPlugin.Util.getString("AggregateValidationVisitor.non_boolean", new Object[] {aggregateFunction, obj}), obj); //$NON-NLS-1$
         	} else if (aggregateFunction == Type.JSONARRAY_AGG) {
 				validateJSONValue(obj, aggExps[0]);
-        	} else if (obj.getType() == null) {
+        	} else if (obj.getType() == null && obj.getArgs().length > 0) {
         		handleValidationError(QueryPlugin.Util.getString("ValidationVisitor.aggregate_type", obj), obj); //$NON-NLS-1$
         	}
         }
@@ -1360,8 +1363,12 @@ public class ValidationVisitor extends AbstractValidationVisitor {
 		}
     }
 
-	private void validateAlterTarget(Alter<?> obj) {
-		if (getMetadata().getImportedModels().contains(obj.getTarget().getSchema())) {
+	private void validateAlterTarget(Alter<?> obj) throws QueryMetadataException, TeiidComponentException {
+	    Object schemaId = obj.getTarget().getMetadataID();
+	    if (schemaId == null) {
+	        return;
+	    }
+		if (getMetadata().getImportedModels().contains(getMetadata().getName(schemaId))) {
 			handleValidationError(QueryPlugin.Util.getString("ValidationVisitor.invalid_alter", obj.getTarget()), obj.getTarget()); //$NON-NLS-1$
 		}
 	}
@@ -1369,8 +1376,8 @@ public class ValidationVisitor extends AbstractValidationVisitor {
     @Override
     public void visit(AlterProcedure obj) {
     	GroupSymbol gs = obj.getTarget();
-    	validateAlterTarget(obj);
     	try {
+    	    validateAlterTarget(obj);
 	    	if (!gs.isProcedure() || !getMetadata().isVirtualModel(getMetadata().getModelID(gs.getMetadataID()))) {
 	    		handleValidationError(QueryPlugin.Util.getString("ValidationVisitor.not_a_procedure", gs), gs); //$NON-NLS-1$
 	    		return;
@@ -1450,13 +1457,13 @@ public class ValidationVisitor extends AbstractValidationVisitor {
     
     @Override
     public void visit(AlterTrigger obj) {
-    	validateAlterTarget(obj);
-    	if (obj.isAfter()) {
-    	    handleValidationError(QueryPlugin.Util.getString("ValidationVisitor.after_not_alterable"), obj); //$NON-NLS-1$
-    	} else {
-    	    validateGroupSupportsUpdate(obj.getTarget());
-    	}
 		try {
+		    validateAlterTarget(obj);
+	        if (obj.isAfter()) {
+	            handleValidationError(QueryPlugin.Util.getString("ValidationVisitor.after_not_alterable"), obj); //$NON-NLS-1$
+	        } else {
+	            validateGroupSupportsUpdate(obj.getTarget());
+	        }
 			if (obj.getDefinition() != null) {
 				Validator.validate(obj.getDefinition(), getMetadata(), this);
 			}			

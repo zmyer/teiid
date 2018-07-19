@@ -63,7 +63,6 @@ public class DDLStringVisitor {
 	private Pattern filter;
 	private Map<String, String> prefixMap;
 	protected boolean usePrefixes = true;
-	protected boolean createNS = true;
 	
 	private final static Map<String, String> BUILTIN_PREFIXES = new HashMap<String, String>();
 	static {
@@ -388,6 +387,9 @@ public class DDLStringVisitor {
                     continue;
                 }
             }
+            if (this.filter != null && !filter.matcher(record.getName()).matches()) {
+                continue;
+            }
             if (first) {
                 first = false;
             }
@@ -406,10 +408,6 @@ public class DDLStringVisitor {
 	}
 
 	private void visit(Table table) {
-		if (this.filter != null && !filter.matcher(table.getName()).matches()) {
-			return;
-		}
-		
 		append(CREATE).append(SPACE);
 		if (table.isPhysical()) {
 			append(FOREIGN_TABLE);
@@ -831,17 +829,18 @@ public class DDLStringVisitor {
 				String uri = key.substring(1, index);
 				key = key.substring(index + 1, key.length());
 				String prefix = BUILTIN_PREFIXES.get(uri);
-				if ((prefix == null && usePrefixes) || createNS) {
-					if (prefixMap == null) {
-						prefixMap = new LinkedHashMap<String, String>();
-					} else {
-						prefix = this.prefixMap.get(uri);
-					}
-					if (prefix == null) {
-						prefix = "n"+this.prefixMap.size(); //$NON-NLS-1$						
-					}
-					this.prefixMap.put(uri, prefix);
-				} 
+				if (usePrefixes) {
+				    if (prefixMap == null) {
+                        prefixMap = new LinkedHashMap<String, String>();
+                    }
+    				if (prefix == null) {
+					    prefix = this.prefixMap.get(uri);
+    					if (prefix == null) {
+    						prefix = "n"+this.prefixMap.size(); //$NON-NLS-1$						
+    					}
+    				}
+                    this.prefixMap.put(uri, prefix);
+				}
 				if (prefix != null) {
 					key = prefix + ":" + key; //$NON-NLS-1$
 				} else {
@@ -853,10 +852,6 @@ public class DDLStringVisitor {
 	}
 	
 	private void visit(Procedure procedure) {
-		if (this.filter != null && !filter.matcher(procedure.getName()).matches()) {
-			return;
-		}
-		
 		append(CREATE).append(SPACE);
 		if (procedure.isVirtual()) {
 			append(VIRTUAL);
@@ -955,9 +950,6 @@ public class DDLStringVisitor {
 	}	
 
 	private void visit(FunctionMethod function) {
-		if (this.filter != null && !filter.matcher(function.getName()).matches()) {
-			return;
-		}		
 		append(CREATE).append(SPACE);
 		if (function.getPushdown().equals(FunctionMethod.PushDown.MUST_PUSHDOWN)) {
 			append(FOREIGN);

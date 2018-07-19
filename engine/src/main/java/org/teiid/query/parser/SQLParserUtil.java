@@ -52,9 +52,9 @@ public class SQLParserUtil {
 	    
     static final Pattern hintPattern = Pattern.compile("\\s*(\\w+(?:\\(\\s*(max:\\d+)?\\s*((?:no)?\\s*join)\\s*\\))?)\\s*", Pattern.DOTALL | Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
 	
-	public static final boolean DECIMAL_AS_DOUBLE = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.decimalAsDouble", false); //$NON-NLS-1$
+	public static final boolean DECIMAL_AS_DOUBLE = PropertiesUtils.getHierarchicalProperty("org.teiid.decimalAsDouble", false, Boolean.class); //$NON-NLS-1$
 	
-	public static final boolean RESULT_ANY_POSITION = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.resultAnyPosition", false); //$NON-NLS-1$
+	public static final boolean RESULT_ANY_POSITION = PropertiesUtils.getHierarchicalProperty("org.teiid.resultAnyPosition", false, Boolean.class); //$NON-NLS-1$
 	
 	String prependSign(String sign, String literal) {
 		if (sign != null && sign.charAt(0) == '-') {
@@ -181,6 +181,16 @@ public class SQLParserUtil {
             throw new ParseException(QueryPlugin.Util.getString(key, id)); 
         }
         return id;
+    }
+    
+    void validateQuotedName(String aliasID, String rawAlias) throws ParseException {
+        String adjustedAlias = aliasID;
+        if (rawAlias.charAt(0) == '"') {
+          adjustedAlias = '"' + StringUtil.replaceAll(aliasID, "\"", "\"\"") + '"'; //$NON-NLS-1$ //$NON-NLS-2$
+        }
+        if (!rawAlias.equals(adjustedAlias)) {
+          throw new ParseException(QueryPlugin.Util.getString("SQLParser.ddl_id_unqualified", rawAlias)); //$NON-NLS-1$ 
+        }
     }
     
     static String removeEscapeChars(String str, String tickChar) {
@@ -455,6 +465,9 @@ public class SQLParserUtil {
 				method.setOutputParameter(fp);
 				fp.setPosition(0);
 			}
+			if (pp.getDefaultValue() != null) {
+			    throw new MetadataException(QueryPlugin.Util.getString("SQLParser.function_default", proc.getName())); //$NON-NLS-1$
+			}
 		}
 		method.setInputParameters(ins);
 		
@@ -572,7 +585,7 @@ public class SQLParserUtil {
 		return column;
 	}
 
-	static void setTypeInfo(ParsedDataType type, BaseColumn column) {
+	public static void setTypeInfo(ParsedDataType type, BaseColumn column) {
 		if (type.length != null){
 			column.setLength(type.length);
 		}
@@ -625,7 +638,7 @@ public class SQLParserUtil {
 		return expressions;
 	}
 	
-	static class  ParsedDataType{
+	public static class  ParsedDataType{
 		String type;
 		Integer length;
 		Integer scale;
@@ -655,7 +668,11 @@ public class SQLParserUtil {
 			else {
 				this.length = length;
 			}			
-		}	
+		}
+		
+		public String getType() {
+            return type;
+        }
 	}
 	
 	public static void setDefault(BaseColumn column, Expression value) {

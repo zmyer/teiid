@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -72,6 +73,7 @@ import org.teiid.dqp.service.TransactionService;
 import org.teiid.events.EventDistributor;
 import org.teiid.jdbc.EnhancedTimer;
 import org.teiid.jdbc.LocalProfile;
+import org.teiid.jdbc.tracing.GlobalTracerInjector;
 import org.teiid.logging.CommandLogMessage;
 import org.teiid.logging.CommandLogMessage.Event;
 import org.teiid.logging.LogConstants;
@@ -85,6 +87,12 @@ import org.teiid.query.tempdata.TempTableStore;
 import org.teiid.query.tempdata.TempTableStore.TransactionMode;
 import org.teiid.query.util.CommandContext;
 import org.teiid.query.util.Options;
+import org.teiid.query.util.TeiidTracingUtil;
+
+import io.opentracing.Span;
+import io.opentracing.contrib.concurrent.TracedExecutorService;
+import io.opentracing.log.Fields;
+import io.opentracing.tag.Tags;
 
 /**
  * Implements the core DQP processing.
@@ -584,9 +592,12 @@ public class DQPCore implements DQP {
 	}	
 	
     void logMMCommand(RequestWorkItem workItem, Event status, Long rowCount, Long cpuTime) {
-    	if ((status != Event.PLAN && !LogManager.isMessageToBeRecorded(LogConstants.CTX_COMMANDLOGGING, MessageLevel.INFO))
+    	if ((status != Event.PLAN && !LogManager.isMessageToBeRecorded(LogConstants.CTX_COMMANDLOGGING, MessageLevel.DETAIL))
     			|| (status == Event.PLAN && !LogManager.isMessageToBeRecorded(LogConstants.CTX_COMMANDLOGGING, MessageLevel.TRACE))) {
-    		return;
+    		if (!TeiidTracingUtil.getInstance().isTracingEnabled(options, workItem.requestMsg.getSpanContext())) {
+    		    return;
+    		}
+    		//else tracing is enabled
     	}
     	
         RequestMessage msg = workItem.requestMsg;
@@ -602,6 +613,7 @@ public class DQPCore implements DQP {
         CommandLogMessage message = null;
         if (status == Event.NEW) {
             message = new CommandLogMessage(System.currentTimeMillis(), rID.toString(), txnID, workContext.getSessionId(), appName, workContext.getUserName(), workContext.getVdbName(), workContext.getVdbVersion(), msg.getCommandString(), cpuTime);
+            workItem.setTracingSpan(TeiidTracingUtil.getInstance().buildSpan(options, message, msg.getSpanContext()));
         } else {
             QueryProcessor qp = workItem.getProcessor();
             PlanNode plan = null;
@@ -609,8 +621,31 @@ public class DQPCore implements DQP {
             	plan = qp.getProcessorPlan().getDescriptionProperties();
             }
             message = new CommandLogMessage(System.currentTimeMillis(), rID.toString(), txnID, workContext.getSessionId(), workContext.getUserName(), workContext.getVdbName(), workContext.getVdbVersion(), rowCount, status, plan);
+            Span span = workItem.getTracingSpan();
+            if (span != null) {
+                switch (status) {
+                case PLAN:
+                    span.log("planning complete"); //$NON-NLS-1$
+                    break;
+                case CANCEL:
+                    span.log("cancel"); //$NON-NLS-1$
+                    break;
+                case END:
+                    span.finish();
+                    break;
+                case ERROR:
+                    Tags.ERROR.set(span, true);
+                    Map<String, String> map = new HashMap<String, String>();
+                    map.put(Fields.EVENT, "error"); //$NON-NLS-1$
+                    span.log(map);
+                    break;
+                default:
+                    //nothing
+                    break;
+                }
+            }
         }
-        LogManager.log(status == Event.PLAN?MessageLevel.TRACE:MessageLevel.INFO, LogConstants.CTX_COMMANDLOGGING, message);
+        LogManager.log(status == Event.PLAN?MessageLevel.TRACE:MessageLevel.DETAIL, LogConstants.CTX_COMMANDLOGGING, message);
     }
     
     public TempTableDataManager getDataTierManager() {
@@ -645,7 +680,7 @@ public class DQPCore implements DQP {
         this.processWorkerPool = config.getTeiidExecutor();
         //we don't want cancellations waiting on normal processing, so they get a small dedicated pool
         //TODO: overflow to the worker pool
-        timeoutExecutor = ExecutorUtils.newFixedThreadPool(3, "Server Side Timeout"); //$NON-NLS-1$
+        timeoutExecutor = new TracedExecutorService(ExecutorUtils.newFixedThreadPool(3, "Server Side Timeout"), GlobalTracerInjector.getTracer()); //$NON-NLS-1$
         this.cancellationTimer = new EnhancedTimer(timeoutExecutor, timeoutExecutor);
         this.maxActivePlans = config.getMaxActivePlans();
         

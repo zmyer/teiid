@@ -58,8 +58,6 @@ import org.teiid.core.types.ClobImpl;
 import org.teiid.core.types.ClobType;
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.types.JDBCSQLTypeInfo;
-import org.teiid.core.types.SQLXMLImpl;
-import org.teiid.core.types.XMLType;
 import org.teiid.core.util.Assertion;
 import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.StringUtil;
@@ -98,11 +96,13 @@ import org.teiid.query.processor.CollectionTupleSource;
 import org.teiid.query.processor.DdlPlan;
 import org.teiid.query.processor.ProcessorDataManager;
 import org.teiid.query.processor.RegisterRequestParameter;
+import org.teiid.query.processor.proc.ProcedurePlan;
 import org.teiid.query.processor.relational.RelationalNodeUtil;
 import org.teiid.query.resolver.util.ResolverUtil;
 import org.teiid.query.sql.lang.Command;
 import org.teiid.query.sql.lang.Criteria;
 import org.teiid.query.sql.lang.Query;
+import org.teiid.query.sql.lang.SPParameter;
 import org.teiid.query.sql.lang.StoredProcedure;
 import org.teiid.query.sql.lang.UnaryFromClause;
 import org.teiid.query.sql.navigator.PreOrPostOrderNavigator;
@@ -284,7 +284,7 @@ public class DataTierManagerImpl implements ProcessorDataManager {
         	}
 		});
         name = SystemTables.TABLES.name();
-        columns = getColumns(tm, name);
+        columns = getColumns(tm, CoreConstants.SYSTEM_MODEL + "." +name); //$NON-NLS-1$
         systemTables.put(SystemTables.TABLES, new RecordExtractionTable<Table>(new TableSystemTable(1, 2, columns), columns) {
 			
         	@Override
@@ -529,6 +529,7 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 				row.add(param.getUUID());
 				row.add(param.getAnnotation());
 				addTypeInfo(row, param, dt);
+				row.add(param.getDefaultValue());
         	}
         	
         	@Override
@@ -672,7 +673,7 @@ public class DataTierManagerImpl implements ProcessorDataManager {
         	}
         });        
         name = SystemAdminTables.VIEWS.name();
-        columns = getColumns(tm, name);
+        columns = getColumns(tm, CoreConstants.SYSTEM_ADMIN_MODEL + "." +name); //$NON-NLS-1$
         systemAdminTables.put(SystemAdminTables.VIEWS, new RecordExtractionTable<Table>(new TableSystemTable(1, 2, columns) {
         	@Override
         	protected boolean isValid(Table s, VDBMetaData vdb,
@@ -721,7 +722,7 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 			}
 		});
         name = SystemTables.COLUMNS.name();
-        columns = getColumns(tm, name);
+        columns = getColumns(tm, CoreConstants.SYSTEM_MODEL + "." +name); //$NON-NLS-1$
         systemTables.put(SystemTables.COLUMNS, new ChildRecordExtractionTable<Table, Column>(new TableSystemTable(1, 2, columns), columns) {
         	@Override
         	protected void fillRow(List<Object> row, Column column,
@@ -935,27 +936,30 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 				row.add(vdb.getName());
 				row.add(currentParent.getUUID());
 				row.add(getType(currentParent));
-				if (currentParent instanceof Column) {
-				    row.add(currentParent.getParent().getParent().getName());
-                    row.add(currentParent.getParent().getName());
-                    row.add(currentParent.getName());
-				} else {
-				    row.add(currentParent.getParent().getName());
-	                row.add(currentParent.getName());
-	                row.add(null);
-				}
+				addNames(row, currentParent);
 				row.add(entry.getUUID());
 				row.add(getType(entry));
-				if (entry instanceof Column) {
-					row.add(entry.getParent().getParent().getName());
-					row.add(entry.getParent().getName());
-					row.add(entry.getName()); 
-				} else {
-					row.add(entry.getParent().getName());
-					row.add(entry.getName());
-					row.add(null);
-				}
+				addNames(row, entry);
         	}
+
+            private void addNames(List<Object> row,
+                    AbstractMetadataRecord record) {
+                if (record instanceof Column) {
+				    if (record.getParent().getParent() instanceof Procedure) {
+				        //parameter, skip the result set parent
+                        row.add(record.getParent().getParent().getParent().getName());
+                        row.add(record.getParent().getParent().getName());				        
+				    } else {
+	                    row.add(record.getParent().getParent().getName());
+	                    row.add(record.getParent().getName());
+				    }
+                    row.add(record.getName());
+				} else {
+				    row.add(record.getParent().getName());
+	                row.add(record.getName());
+	                row.add(null);
+				}
+            }
         	
         	private String getType(AbstractMetadataRecord record) {
         		if (record instanceof Table) {
@@ -1311,7 +1315,10 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 			return et.processQuery(query, vdb, indexMetadata, context);
 		} 			
 		Collection<List<?>> rows = new ArrayList<List<?>>();
-		StoredProcedure proc = (StoredProcedure)command;		
+		StoredProcedure proc = (StoredProcedure)command;
+		for (SPParameter param : proc.getInputParameters()) {
+		    ProcedurePlan.checkNotNull(param.getParameterSymbol(), ((Constant)param.getExpression()).getValue(), context.getMetadata());
+		}
 		if (StringUtil.startsWithIgnoreCase(proc.getProcedureCallableName(), CoreConstants.SYSTEM_ADMIN_MODEL)) {
 			final SystemAdminProcs sysProc = SystemAdminProcs.valueOf(proc.getProcedureCallableName().substring(CoreConstants.SYSTEM_ADMIN_MODEL.length() + 1).toUpperCase());
 			switch (sysProc) {
@@ -1326,9 +1333,10 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 				int msgLevel = getLevel(level);
 				boolean logged = false;
 				if (LogManager.isMessageToBeRecorded(logContext, msgLevel)) {
-					if (message != null) {
-						LogManager.log(msgLevel, logContext, message);
+					if (message == null) {
+					    message = "null"; //$NON-NLS-1$
 					}
+                    LogManager.log(msgLevel, logContext, message);
 					logged = true;
 				}
 				if (proc.returnParameters()) {
@@ -1433,15 +1441,7 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 		final SystemProcs sysTable = SystemProcs.valueOf(proc.getProcedureCallableName().substring(CoreConstants.SYSTEM_MODEL.length() + 1).toUpperCase());
 		switch (sysTable) {
 		case GETXMLSCHEMAS:
-			try {
-				Object groupID = indexMetadata.getGroupID((String)((Constant)proc.getParameter(1).getExpression()).getValue());
-				List<SQLXMLImpl> schemas = indexMetadata.getXMLSchemas(groupID);
-				for (SQLXMLImpl schema : schemas) {
-					rows.add(Arrays.asList(new XMLType(schema)));
-				}
-			} catch (QueryMetadataException e) {
-				 throw new TeiidProcessingException(QueryPlugin.Event.TEIID30553, e);
-			}
+		    //no rows -deprecated
 			break;
 		case ARRAYITERATE:
 			Object array = ((Constant)proc.getParameter(1).getExpression()).getValue();

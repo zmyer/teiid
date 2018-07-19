@@ -54,7 +54,6 @@ import org.teiid.query.analysis.AnalysisRecord;
 import org.teiid.query.function.FunctionDescriptor;
 import org.teiid.query.function.FunctionLibrary;
 import org.teiid.query.function.FunctionTree;
-import org.teiid.query.mapping.relational.QueryNode;
 import org.teiid.query.metadata.QueryMetadataInterface;
 import org.teiid.query.metadata.TempMetadataID;
 import org.teiid.query.metadata.TempMetadataStore;
@@ -195,24 +194,6 @@ public class TestResolver {
         return criteria;
     }
     
-    public static Command helpResolveWithBindings(String sql, QueryMetadataInterface metadata, List bindings) throws QueryResolverException, TeiidComponentException { 
-       
-        // parse
-        Command command = helpParse(sql);
-        
-        QueryNode qn = new QueryNode(sql);
-        qn.setBindings(bindings);
-        // resolve
-    	QueryResolver.resolveWithBindingMetadata(command, metadata, qn, true);
-
-        CheckSymbolsAreResolvedVisitor vis = new CheckSymbolsAreResolvedVisitor();
-        DeepPreOrderNavigator.doVisit(command, vis);
-
-        Collection<LanguageObject> unresolvedSymbols = vis.getUnresolvedSymbols();
-        assertTrue("Found unresolved symbols: " + unresolvedSymbols, unresolvedSymbols.isEmpty()); //$NON-NLS-1$
-        return command;
-    }
-
     static void helpResolveException(String sql, QueryMetadataInterface queryMetadata){
     	helpResolveException(sql, queryMetadata, null);	
     }
@@ -727,6 +708,26 @@ public class TestResolver {
 			new String[] { "pm3.g1.e2", "pm3.g2.e2", "pm3.g1.e2", "pm3.g2.e2" } ); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 	}
 	
+    @Test public void testLateralJoinDirection() {
+        helpResolveException("select * from pm1.g1 right outer join lateral(select g1.e1) x on pm1.g1.e1 = x.e1", "TEIID31268 Element g1.e1 cannot be a lateral reference because it does not come from an INNER or LEFT OUTER join."); //$NON-NLS-1$
+    }
+	
+    @Test public void testLateralJoinDirectionImplicit() {
+        helpResolveException("select * from pm1.g1 x1 right join texttable(x1.e1||'' columns a string) x2 on x1.e1=x2.e1", "TEIID31268 Element x1.e1 cannot be a lateral reference because it does not come from an INNER or LEFT OUTER join."); //$NON-NLS-1$
+    }
+    
+    @Test public void testLateralJoinDirectionImplicit1() {
+        helpResolveException("select * from pm1.g1 x1 right join arraytable((x1.e1,) columns a string) x2 on x1.e1=x2.e1", "TEIID31268 Element x1.e1 cannot be a lateral reference because it does not come from an INNER or LEFT OUTER join."); //$NON-NLS-1$
+    }
+    
+    @Test public void testLateralJoinDirection1() {
+        helpResolve("select * from (select 1 e1) g1, ((select 1 e1) g2 right outer join lateral(select g1.e1) x on g2.e1 = x.e1)"); //$NON-NLS-1$
+    }
+    
+    @Test public void testLateralJoinDirection2() {
+        helpResolveException("select * from pm1.g1 full outer join lateral(select pm1.g1.e1) x on pm1.g1.e1 = x.e1"); //$NON-NLS-1$
+    }
+	
     @Test public void testHavingRequiringConvertOnAggregate1() {
         helpResolve("SELECT * FROM pm1.g1 GROUP BY e4 HAVING MAX(e2) > 1.2"); //$NON-NLS-1$
     }
@@ -771,51 +772,6 @@ public class TestResolver {
 		helpResolve("SELECT dayofmonth('2002-01-01') FROM pm1.g1"); //$NON-NLS-1$ //$NON-NLS-2$
 	}
     
-    @Test public void testResolveParameters() throws Exception {
-        List bindings = new ArrayList();
-        bindings.add("pm1.g2.e1"); //$NON-NLS-1$
-        bindings.add("pm1.g2.e2"); //$NON-NLS-1$
-        
-        Query resolvedQuery = (Query) helpResolveWithBindings("SELECT pm1.g1.e1, ? FROM pm1.g1 WHERE pm1.g1.e1 = ?", metadata, bindings); //$NON-NLS-1$
-
-        helpCheckFrom(resolvedQuery, new String[] { "pm1.g1" }); //$NON-NLS-1$
-        helpCheckSelect(resolvedQuery, new String[] { "pm1.g1.e1", "expr2" }); //$NON-NLS-1$ //$NON-NLS-2$
-        helpCheckElements(resolvedQuery.getCriteria(), 
-            new String[] { "pm1.g1.e1", "pm1.g2.e2" }, //$NON-NLS-1$
-            new String[] { "pm1.g1.e1", "pm1.g2.e2" } ); //$NON-NLS-1$
-            
-    }
-    
-    @Test public void testResolveInputParameters() throws Exception {
-        List bindings = new ArrayList();
-        bindings.add("pm1.g2.e1 as x"); //$NON-NLS-1$
-        
-        Query resolvedQuery = (Query) helpResolveWithBindings("SELECT pm1.g1.e1, input.x FROM pm1.g1", metadata, bindings); //$NON-NLS-1$
-
-        helpCheckFrom(resolvedQuery, new String[] { "pm1.g1" }); //$NON-NLS-1$
-        assertEquals("SELECT pm1.g1.e1, pm1.g2.e1 AS x FROM pm1.g1", resolvedQuery.toString());
-    }
-
-    @Test public void testResolveParametersInsert() throws Exception {
-    	List<String> bindings = Arrays.asList("pm1.g2.e1"); //$NON-NLS-1$
-        
-        helpResolveWithBindings("INSERT INTO pm1.g1 (e1) VALUES (?)", metadata, bindings); //$NON-NLS-1$
-    }
-    
-    @Test public void testResolveParametersExec() throws Exception {
-        List<String> bindings = Arrays.asList("pm1.g2.e1"); //$NON-NLS-1$
-        
-        Query resolvedQuery = (Query)helpResolveWithBindings("SELECT * FROM (exec pm1.sq2(?)) as a", metadata, bindings); //$NON-NLS-1$
-        StoredProcedure sp = (StoredProcedure)((SubqueryFromClause)resolvedQuery.getFrom().getClauses().get(0)).getCommand();
-        assertEquals(String.class, sp.getInputParameters().get(0).getExpression().getType());
-    }
-    
-    @Test public void testResolveParametersExecNamed() throws Exception {
-        List<String> bindings = Arrays.asList("pm1.g2.e1 as x"); //$NON-NLS-1$
-        
-        helpResolveWithBindings("SELECT * FROM (exec pm1.sq2(input.x)) as a", metadata, bindings); //$NON-NLS-1$
-    }
-
     @Test public void testUseNonExistentAlias() {
         helpResolveException("SELECT portfoliob.e1 FROM ((pm1.g1 AS portfoliob JOIN pm1.g2 AS portidentb ON portfoliob.e1 = portidentb.e1) RIGHT OUTER JOIN pm1.g3 AS identifiersb ON portidentb.e1 = 'ISIN' and portidentb.e2 = identifiersb.e2) RIGHT OUTER JOIN pm1.g1 AS issuesb ON a.identifiersb.e1 = issuesb.e1"); //$NON-NLS-1$
     }       
@@ -2908,6 +2864,22 @@ public class TestResolver {
     	assertTrue(((CompareCriteria)q.getCriteria()).getLeftExpression() instanceof ElementSymbol);
     }
     
+    @Test public void testSelectAllOrder() {
+        Query q = (Query)helpResolve("select * from pm1.g1, pm1.g2");
+        assertEquals("[pm1.g1.e1, pm1.g1.e2, pm1.g1.e3, pm1.g1.e4, pm1.g2.e1, pm1.g2.e2, pm1.g2.e3, pm1.g2.e4]", q.getProjectedSymbols().toString());
+        
+        q = (Query)helpResolve("select * from pm1.g1 cross join pm1.g2");
+        assertEquals("[pm1.g1.e1, pm1.g1.e2, pm1.g1.e3, pm1.g1.e4, pm1.g2.e1, pm1.g2.e2, pm1.g2.e3, pm1.g2.e4]", q.getProjectedSymbols().toString());
+        
+        q = (Query)helpResolve("select * from pm1.g1, pm1.g2 inner join pm1.g3 on (pm1.g2.e1 = pm1.g3.e1)");
+        assertEquals("[pm1.g1.e1, pm1.g1.e2, pm1.g1.e3, pm1.g1.e4, pm1.g2.e1, pm1.g2.e2, pm1.g2.e3, pm1.g2.e4, pm1.g3.e1, pm1.g3.e2, pm1.g3.e3, pm1.g3.e4]", q.getProjectedSymbols().toString());
+    }
+    
+    @Test public void testSelectAllOrderCommonTable() {
+        Query q = (Query)helpResolve("with x as (select 1 y) select * from pm1.g1, pm1.g2");
+        assertEquals("[pm1.g1.e1, pm1.g1.e2, pm1.g1.e3, pm1.g1.e4, pm1.g2.e1, pm1.g2.e2, pm1.g2.e3, pm1.g2.e4]", q.getProjectedSymbols().toString());
+    }
+    
     @Test public void testLeadOffset() {
         //must be integer
         String sql = "SELECT LEAD(e1, 'a') over (order by e2) FROM pm1.g1";
@@ -2935,6 +2907,65 @@ public class TestResolver {
         String sql = "select a.a1 from (select 1 as a1) a where a.a1 in (select a1 from a)";
         
         helpResolveException(sql);
+    }
+    
+    @Test public void testTableAliasString() throws Exception {
+        String sql = "select \"pm1g2\".* from pm1.g1 as \"pm1g2\"";
+        Query query = (Query)helpResolve(sql);
+        UnaryFromClause ufc = (UnaryFromClause)query.getFrom().getClauses().get(0);
+        GroupSymbol gs = ufc.getGroup();
+        assertEquals("pm1g2", gs.getName());
+        assertEquals("SELECT pm1g2.* FROM pm1.g1 AS pm1g2", query.toString());
+    }
+
+    /**
+     * This is not correct behavior, but it is acceptable to prevent other issues
+     */
+    @Test public void testTableAliasWithPeriodAmbiguous() throws Exception {
+        String sql = "select \"pm1.g2\".*, pm1.g2.* from pm1.g1 as \"pm1.g2\", pm1.g2";
+        helpResolveException(sql);
+    }
+    
+    @Test public void testTableAliasWithPeriod() throws Exception {
+        String sql = "select \"pm1.g2\".*, e1, \"pm1.g2\".e2, pm1.g2.e2 from pm1.g1 as \"pm1.g2\"";
+        Query query = (Query)helpResolve(sql);
+        UnaryFromClause ufc = (UnaryFromClause)query.getFrom().getClauses().get(0);
+        GroupSymbol gs = ufc.getGroup();
+        assertEquals("pm1.g2", gs.getName());
+        assertEquals("pm1.g1", gs.getDefinition());
+        assertFalse(gs.isTempTable());
+        assertEquals("SELECT \"pm1.g2\".*, e1, \"pm1.g2\".e2, \"pm1.g2\".e2 FROM pm1.g1 AS \"pm1.g2\"", query.toString());
+        assertEquals("[\"pm1.g2\".e1, \"pm1.g2\".e2, \"pm1.g2\".e3, \"pm1.g2\".e4, e1, \"pm1.g2\".e2, \"pm1.g2\".e2]", query.getProjectedSymbols().toString());
+    }
+    
+    @Test public void testTableAliasWithMultiplePeriods() throws Exception {
+        String sql = "select \"pm1..g2\".e1 from pm1.g1 as \"pm1..g2\"";
+        Query query = (Query)helpResolve(sql);
+        UnaryFromClause ufc = (UnaryFromClause)query.getFrom().getClauses().get(0);
+        GroupSymbol gs = ufc.getGroup();
+        assertEquals("pm1..g2", gs.getName());
+        assertEquals("pm1.g1", gs.getDefinition());
+        assertEquals("SELECT \"pm1..g2\".e1 FROM pm1.g1 AS \"pm1..g2\"", query.toString());
+        assertEquals("[\"pm1..g2\".e1]", query.getProjectedSymbols().toString());
+    }
+    
+    @Test public void testSubqueryAliasWithPeriod() throws Exception {
+        String sql = "select \"pm1.g2\".x from (select 1 as x) as \"pm1.g2\"";
+        Query query = (Query)helpResolve(sql);
+        SubqueryFromClause sfc = (SubqueryFromClause)query.getFrom().getClauses().get(0);
+        GroupSymbol gs = sfc.getGroupSymbol();
+        assertEquals("pm1.g2", gs.getName());
+        assertNull(gs.getDefinition());
+        assertEquals("SELECT \"pm1.g2\".x FROM (SELECT 1 AS x) AS \"pm1.g2\"", query.toString());
+        assertEquals("SELECT \"pm1.g2\".x FROM (SELECT 1 AS x) AS \"pm1.g2\"", query.clone().toString());
+        assertEquals("[\"pm1.g2\".x]", query.getProjectedSymbols().toString());
+    }
+    
+    @Test public void testTextTableAliasWithPeriod() throws Exception {
+        Command command = helpResolve("select \"x.y.z\".*, \"x.y.z\".x  from pm1.g1, texttable(e1 COLUMNS x string) \"x.y.z\""); //$NON-NLS-1$
+        assertEquals(2, command.getProjectedSymbols().size());
+        assertEquals("SELECT \"x.y.z\".*, \"x.y.z\".x FROM pm1.g1, TEXTTABLE(e1 COLUMNS x string) AS \"x.y.z\"", command.toString());
+        assertEquals("SELECT \"x.y.z\".*, \"x.y.z\".x FROM pm1.g1, TEXTTABLE(e1 COLUMNS x string) AS \"x.y.z\"", command.clone().toString());
     }
     
     private void helpTestWidenToString(String sql) {

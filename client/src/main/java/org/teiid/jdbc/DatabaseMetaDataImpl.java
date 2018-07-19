@@ -38,11 +38,18 @@ import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.types.JDBCSQLTypeInfo;
 import org.teiid.core.util.PropertiesUtils;
 import org.teiid.core.util.SqlUtil;
+import org.teiid.core.util.StringUtil;
 
 
 public class DatabaseMetaDataImpl extends WrapperImpl implements DatabaseMetaData {
 
 	public static final String REPORT_AS_VIEWS = "reportAsViews"; //$NON-NLS-1$
+	
+	public static final String NULL_SORT = "nullsAreSorted"; //$NON-NLS-1$
+	
+	enum NullSort {
+	    High, Low, AtStart, AtEnd
+	}
 
 	private static final String IS_NULLABLE = "CASE NullType WHEN 'Nullable' THEN 'YES' WHEN 'No Nulls' THEN 'NO' ELSE '' END AS IS_NULLABLE"; //$NON-NLS-1$
 
@@ -257,7 +264,7 @@ public class DatabaseMetaDataImpl extends WrapperImpl implements DatabaseMetaDat
           .append(", TypeName AS TYPE_NAME, ColumnSize AS \"PRECISION\", TypeLength  AS LENGTH, convert(case when scale > 32767 then 32767 else Scale end, short) AS SCALE") //$NON-NLS-1$
           .append(", Radix AS RADIX, convert(decodeString(NullType, '") //$NON-NLS-1$
           .append(PROC_COLUMN_NULLABILITY_MAPPING).append("', ','), integer) AS NULLABLE") //$NON-NLS-1$
-          .append(", p.Description AS REMARKS, NULL AS COLUMN_DEF") //$NON-NLS-1$
+          .append(", p.Description AS REMARKS, %s AS COLUMN_DEF") //$NON-NLS-1$
           .append(", NULL AS SQL_DATA_TYPE, NULL AS SQL_DATETIME_SUB, NULL AS CHAR_OCTET_LENGTH, p.Position AS ORDINAL_POSITION") //$NON-NLS-1$
           .append(", "+IS_NULLABLE+", p.ProcedureName as SPECIFIC_NAME FROM ") //$NON-NLS-1$ //$NON-NLS-2$
           .append(RUNTIME_MODEL.VIRTUAL_MODEL_NAME)
@@ -361,8 +368,10 @@ public class DatabaseMetaDataImpl extends WrapperImpl implements DatabaseMetaDat
     
     /** ATTRIBUTES */
 
-    // driver's connection object used in constructin this object.
+    // driver's connection object used in constructing this object.
     private ConnectionImpl driverConnection;
+    
+    private NullSort nullSort;
 
     /**
      * <p>Constructor which initializes with the connection object on which metadata
@@ -378,6 +387,11 @@ public class DatabaseMetaDataImpl extends WrapperImpl implements DatabaseMetaDat
         	TABLE_TYPE = "CASE WHEN IsSystem = 'true' and UCASE(Type) = 'TABLE' THEN 'SYSTEM TABLE' ELSE UCASE(Type) END"; //$NON-NLS-1$
         }
         
+        String nullSortProp = connection.getConnectionProps().getProperty(NULL_SORT);
+        if (nullSortProp != null) {
+            nullSort = StringUtil.caseInsensitiveValueOf(NullSort.class, nullSortProp);
+        }
+        
         QUERY_TABLES = new StringBuffer("SELECT VDBName AS TABLE_CAT, SchemaName AS TABLE_SCHEM, Name AS TABLE_NAME") //$NON-NLS-1$
         .append(", ").append(TABLE_TYPE).append(" AS TABLE_TYPE, Description AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM") //$NON-NLS-1$ //$NON-NLS-2$
         .append(", NULL AS TYPE_NAME, NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION, IsPhysical AS ISPHYSICAL") //$NON-NLS-1$
@@ -390,7 +404,7 @@ public class DatabaseMetaDataImpl extends WrapperImpl implements DatabaseMetaDat
     /**
      * <p>Checks whether the current user has the required security rights to call
      * all the procedures returned by the method getProcedures.</p>
-     * @return true if the precedures are selectable else return false
+     * @return true if the procedures are selectable else return false
      * @throws SQLException. Should never occur.
      */
     public boolean allProceduresAreCallable() throws SQLException {
@@ -1270,7 +1284,16 @@ public class DatabaseMetaDataImpl extends WrapperImpl implements DatabaseMetaDat
         boolean newMetadata = driverConnection.getServerConnection().getServerVersion().compareTo("09.03") >= 0; //$NON-NLS-1$
 
         try {
-            prepareQuery = driverConnection.prepareStatement(newMetadata?QUERY_PROCEDURE_COLUMNS:QUERY_PROCEDURE_COLUMNS_OLD);
+            String query = QUERY_PROCEDURE_COLUMNS_OLD;
+            if (newMetadata) {
+                query = QUERY_PROCEDURE_COLUMNS;
+                if (driverConnection.getServerConnection().getServerVersion().compareTo("10.02") >= 0) { //$NON-NLS-1$
+                    query = String.format(query, "DefaultValue"); //$NON-NLS-1$
+                } else {
+                    query = String.format(query, "NULL"); //$NON-NLS-1$
+                }
+            }
+            prepareQuery = driverConnection.prepareStatement(query);
             prepareQuery.setObject(1, catalog.toUpperCase());
             prepareQuery.setObject(2, schemaPattern.toUpperCase());
             prepareQuery.setObject(3, procedureNamePattern.toUpperCase());
@@ -1875,7 +1898,7 @@ public class DatabaseMetaDataImpl extends WrapperImpl implements DatabaseMetaDat
     }
 
     /**
-     * <p>Checks whether the concatenation of a NULL vaule and a non-NULL value results
+     * <p>Checks whether the concatenation of a NULL value and a non-NULL value results
      * in a NULL value.</p>
      * @return if so return true, else false.
      * @throws SQLException, should never occur.
@@ -1885,39 +1908,39 @@ public class DatabaseMetaDataImpl extends WrapperImpl implements DatabaseMetaDat
     }
 
     /**
-     * <p>Checks whether NULL vaules are sorted at the end regardless of sort order.</p>
+     * <p>Checks whether NULL values are sorted at the end regardless of sort order.</p>
      * @return if so return true, else false.
      * @throws SQLException, should never occur.
      */
     public boolean nullsAreSortedAtEnd() throws SQLException {
-        return false;
+        return nullSort == NullSort.AtEnd;
     }
 
     /**
-     * <p>Checks whether NULL vaules are sorted at the start regardless of sort order.</p>
+     * <p>Checks whether NULL values are sorted at the start regardless of sort order.</p>
      * @return if so return true, else false.
      * @throws SQLException, should never occur.
      */
     public boolean nullsAreSortedAtStart() throws SQLException {
-        return false;
+        return nullSort == NullSort.AtStart;
     }
 
     /**
-     * <p>Checks whether NULL vaules are sorted high.</p>
+     * <p>Checks whether NULL values are sorted high.</p>
      * @return if so return true, else false.
      * @throws SQLException, should never occur.
      */
     public boolean nullsAreSortedHigh() throws SQLException {
-        return false;
+        return nullSort == NullSort.High;
     }
 
     /**
-     * <p>Checks whether NULL vaules are sorted low.</p>
+     * <p>Checks whether NULL values are sorted low.</p>
      * @return if so return true, else false.
      * @throws SQLException, should never occur.
      */
     public boolean nullsAreSortedLow() throws SQLException {
-        return true;
+        return nullSort == NullSort.Low;
     }
 
     /**

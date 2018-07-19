@@ -519,6 +519,7 @@ TOKEN : /* NonReserved words */
 |   <RENAME: "rename">
 |   <DOMAIN: "domain">
 |   <USAGE: "usage">
+|   <POSITION: "position">
 }
 /*
 name=all in group identifier
@@ -628,7 +629,7 @@ Token nonReserved() :
      |<SELECTOR>|<SKIP_KEYWORD>|<WIDTH>|<PASSING>|<NAME>|<ENCODING>|<COLUMNS>|<DELIMITER>|<QUOTE>|<HEADER>|<NULLS>|<OBJECTTABLE>
      |<VERSION>|<INCLUDING>|<EXCLUDING>|<XMLDECLARATION>|<VARIADIC>|<RAISE>|<EXCEPTION>|<CHAIN>|<JSONARRAY_AGG>|<JSONOBJECT>|<PRESERVE>|<UPSERT>|<AFTER>
      |<TYPE>|<TRANSLATOR>|<JAAS>|<CONDITION>|<MASK>|<ACCESS>|<CONTROL>|<NONE>|<DATA>|<DATABASE>|<PRIVILEGES>|<ROLE>|<SCHEMA>|<USE>|<REPOSITORY>|<RENAME>
-     |<DOMAIN>|<USAGE>|<GEOMETRY>|<DEFAULT_KEYWORD>)
+     |<DOMAIN>|<USAGE>|<GEOMETRY>|<DEFAULT_KEYWORD>|<POSITION>)
     {
     	return getToken(0);
     }	
@@ -2585,7 +2586,9 @@ ArrayTable arrayTable(ParseInfo info) :
  	<COLUMNS>
  	columns = createElementsWithTypes(info) 
  	<RPAREN>
- 	[<AS>] aliasID=id(Boolean.FALSE)
+ 	[<AS>] aliasID=id(null) {
+ 	    validateQuotedName(aliasID, getToken(0).image);
+	}
  	{
  		ArrayTable result = new ArrayTable();
  		result.setArrayValue(array);
@@ -2674,7 +2677,9 @@ TextTable textTable(ParseInfo info) :
       }
   	]
  	<RPAREN>
- 	[<AS>] aliasID=id(Boolean.FALSE)
+ 	[<AS>] aliasID=id(null) {
+ 	    validateQuotedName(aliasID, getToken(0).image);
+	}
  	{
  		TextTable result = new TextTable();
  		result.setFile(file);
@@ -2899,7 +2904,9 @@ ObjectTable objectTable(ParseInfo info) :
       }
     )*
  	<RPAREN>
- 	[<AS>] aliasID=id(Boolean.FALSE)
+ 	[<AS>] aliasID=id(null) {
+ 	    validateQuotedName(aliasID, getToken(0).image);
+	}
  	{
  		ObjectTable result = new ObjectTable();
  		result.setScriptingLanguage(lang);
@@ -2984,7 +2991,9 @@ XMLTable xmlTable(ParseInfo info) :
  	  )*
  	]
  	<RPAREN>
- 	[<AS>] aliasID=id(Boolean.FALSE)
+ 	[<AS>] aliasID=id(null) {
+ 	    validateQuotedName(aliasID, getToken(0).image);
+	}
  	{
  		XMLTable result = new XMLTable();
  		result.setXquery(xquery);
@@ -3071,8 +3080,9 @@ SubqueryFromClause subqueryFromClause(ParseInfo info) :
       command = storedProcedure(info, 1) )
 	<RPAREN>
 	[<AS>]
-	aliasID = id(Boolean.FALSE)
-	
+	aliasID = id(null) {
+		    validateQuotedName(aliasID, getToken(0).image);
+	}
 	{
 		SubqueryFromClause clause = new SubqueryFromClause(aliasID, command);
         setFromClauseOptions(lparen, clause);
@@ -3095,7 +3105,11 @@ UnaryFromClause unaryFromClause(ParseInfo info) :
 	UnaryFromClause clause = null;
 }
 {	
-	(groupID=id(null) {groupToken = getToken(0);} [[<AS>] aliasID=id(Boolean.FALSE)])
+	(groupID=id(null) {groupToken = getToken(0);} [
+	   [<AS>] aliasID=id(null) {
+		    validateQuotedName(aliasID, getToken(0).image);
+		}
+	])
 	{
     	if(aliasID != null) {		
             group = new GroupSymbol(aliasID, groupID);
@@ -3272,7 +3286,7 @@ Token operator() :
 }
 
 /*
-name=IS Distinct
+name=is distinct
 description=Is Distinct Right Hand Side
 example=[source,sql]\n----\nIS DISTINCT FROM expression\n----\n
 */
@@ -3747,7 +3761,8 @@ Limit limit(ParseInfo info) :
 {
     {t = getToken(1);}
     ((<LIMIT> offset = intParam(info)
-	[<COMMA> limit = intParam(info)])
+	[(<COMMA> limit = intParam(info))|
+	 (<OFFSET> limit = intParam(info) {Expression temp = limit; limit = offset; offset = temp;})])
 	{
 	  if (limit == null) {
 	    limit = offset;
@@ -4316,6 +4331,7 @@ Expression function(ParseInfo info) :
 	Expression condition = null;
 	String literal = null;
 	ParsedDataType type = null;
+	Integer intVal = null;
 }
 {
 	((	funcToken = <CONVERT>
@@ -4520,7 +4536,9 @@ Expression function(ParseInfo info) :
 		{
 			return expression;
 		}
-	|   
+	|   LOOKAHEAD(<POSITION><LPAREN>) (funcToken = <POSITION> {funcToken.image="locate";} <LPAREN> expression = commonValueExpression(info) {args.add(expression);} 
+	     <IN> expression = commonValueExpression(info) {args.add(expression);} <RPAREN>)
+	|
 	(	funcName = id(null)
 		<LPAREN>
 		[<ALL> { distinct = false; } | <DISTINCT> {distinct = true;} ]
@@ -4528,7 +4546,13 @@ Expression function(ParseInfo info) :
 		[ orderBy = orderby(info) ]
 		<RPAREN>
 		[condition = filterClause(info)]
-	))		
+	)
+	|   (funcToken = <CURRENT_DATE>[<LPAREN><RPAREN>])
+    |   
+    (   (funcToken = <CURRENT_TIMESTAMP>| funcToken = <CURRENT_TIME>)
+    	[<LPAREN> intVal = intVal() <RPAREN> {args.add(new Constant(intVal));}]
+    )
+	)		
 	{
 		if(funcName == null) { 
 			funcName = funcToken.image;
@@ -5084,7 +5108,7 @@ void ddlStmt(DatabaseStore dbStore) :
 	 LOOKAHEAD(2)  createDatabase(dbStore) |
 	 //LOOKAHEAD(2)  dropDatabase(dbStore) |
 	 LOOKAHEAD(2)  useDatabase(dbStore) |
-     LOOKAHEAD(2)  dropSchema(dbStore) |
+     LOOKAHEAD(3)  dropSchema(dbStore) |
      LOOKAHEAD(2)  useSchema(dbStore) |
      LOOKAHEAD(3)  createSchema(dbStore) |
      LOOKAHEAD(3)  createDDLProcedure(dbStore, ParseInfo.DEFAULT_INSTANCE) [ ddlStmt(dbStore) ] |
@@ -5195,7 +5219,7 @@ void createSchema(DatabaseStore dbStore) :
     ArrayList<String> servers = new ArrayList<String>();
 }
 {
-    <CREATE> [<VIRTUAL> {physical=false;}] <SCHEMA> 
+    <CREATE> [<VIRTUAL> {physical=false;}|<FOREIGN>] <SCHEMA> 
     name = id(Boolean.TRUE) 
     {
         schema = new Schema();
@@ -5235,12 +5259,12 @@ example=[source,sql]\n----\DROP SCHEMA foo \n----\n
 void dropSchema(DatabaseStore dbStore) :
 {
     String name = null;
-    boolean physical = true;
+    Boolean virtual = null;
 }
 { 
-    <DROP> [<VIRTUAL> {physical=false;}] <SCHEMA> name = id(null) 
+    <DROP> [<VIRTUAL> {virtual=true;} | <FOREIGN> {virtual=false;}] <SCHEMA> name = id(null) 
     {
-        dbStore.schemaDropped(name);
+        dbStore.schemaDropped(name, virtual);
     }
 }
 
@@ -5670,17 +5694,17 @@ example=[source,sql]\n----\nDROP [FOREIGN (TABLE|VIEW) table-name\n----\n
 void dropProcedure(DatabaseStore dbStore) :
 {
 	String procedureName = null;
-	boolean virtual = false;
+	Boolean virtual = null;
 	boolean function = false;
 }
 {
-	<DROP> [<VIRTUAL> | <FOREIGN> {virtual = false;}](<PROCEDURE> | <FUNCTION> {function = true;})
+	<DROP> [<VIRTUAL> {virtual = true;}| <FOREIGN> {virtual = false;}](<PROCEDURE> | <FUNCTION> {function = true;})
 	procedureName = id(null)
 	{
 	   	if (function){
-	   		dbStore.functionDropped(procedureName);
+	   		dbStore.functionDropped(procedureName, virtual);
 	   	} else {
-	   		dbStore.procedureDropped(procedureName);
+	   		dbStore.procedureDropped(procedureName, virtual);
 	    }
 	}
 }
@@ -5827,9 +5851,9 @@ void dropTableView(DatabaseStore dbStore) :
 		([<VIRTUAL>] <VIEW> {view = true;}) |
 		(<GLOBAL> <TEMPORARY> <TABLE> {globalTemp = true; view = true;})
 	) 
-	tableName = unqualifiedId()
+	tableName = id(null)
 	{
-	   dbStore.tableDropped(tableName);
+	   dbStore.tableDropped(tableName, globalTemp, view);
 	}
 }
 
@@ -5927,7 +5951,7 @@ AbstractMetadataRecord foreignKey(MetadataFactory factory, Table table, String n
     viewName = id(null)
     [pkColumnNames = columnList(true, false)]
     {
-	    return factory.addForiegnKey(name != null?name:("FK"+table.getForeignKeys().size()), columnNames, pkColumnNames, viewName, table);   
+	    return factory.addForeignKey(name != null?name:("FK"+table.getForeignKeys().size()), columnNames, pkColumnNames, viewName, table);   
     }
 }
 
@@ -6074,7 +6098,7 @@ void createColumn(MetadataFactory factory, Table table) :
 	    if (index){
 	 		factory.addIndex("INDEX"+table.getIndexes().size(), true, columnName, table);
 	 	} else if (unique){
-	 		factory.addIndex("UNIQUE"+table.getIndexes().size(), false, columnName, table);
+	 		factory.addIndex("UNIQUE"+table.getUniqueKeys().size(), false, columnName, table);
 	 	} else if (pk) {
 	    	if (table.getPrimaryKey() != null) {
 	    		throw new MetadataException(QueryPlugin.Util.getString("SQLParser.pk_exists", table.getName()));
@@ -6161,11 +6185,11 @@ void alterStatement(DatabaseStore dbStore) :
     boolean virtual = false;
 }
 {
-    <ALTER> [<VIRTUAL> {virtual = true;} | <FOREIGN>]
+    <ALTER>
     (
         LOOKAHEAD(3)
-        alterTable(dbStore, virtual, ParseInfo.DEFAULT_INSTANCE) |
-        alterProcedure(dbStore, virtual, ParseInfo.DEFAULT_INSTANCE) |
+        alterTable(dbStore, ParseInfo.DEFAULT_INSTANCE) |
+        alterProcedure(dbStore, ParseInfo.DEFAULT_INSTANCE) |
         alterTrigger(dbStore, ParseInfo.DEFAULT_INSTANCE) |
         alterServer(dbStore) |
         alterTranslator(dbStore) |
@@ -6178,45 +6202,34 @@ name=ALTER TABLE
 description=alters options of database
 example=[source,sql]\n----\nALTER TABLE foo (ADD|DROP|ALTER) COLUMN <name> <type> OPTIONS ( (ADD|SET|DROP) x y)\n----\n
 */
-void alterTable(DatabaseStore dbStore, boolean virtual, ParseInfo info) :
+void alterTable(DatabaseStore dbStore, ParseInfo info) :
 {
     String objectName = null;
     QueryCommand command = null;
     Token comment = null;
-    Table table = null;
+    boolean virtual = false;
 }
 {
-    ((<VIEW> objectName = id(null)
+    (
+     ([<VIRTUAL>] <VIEW> objectName = id(null) {virtual = true;}) | 
+     ([<FOREIGN>] <TABLE> objectName = id(null))
+    )
+	 (
+      (<AS> { comment = getToken(1).specialToken; } command = queryExpression(info)
         {
-      		table = (Table)dbStore.getSchemaRecord(objectName, Database.ResourceType.TABLE);
+            if (comment != null) {
+                command.setCacheHint(getQueryCacheOption(comment.image));
+            }
+            dbStore.setViewDefinition(objectName, command.toString());        
         }
-	    (<AS> { comment = getToken(1).specialToken; } command = queryExpression(info)
-	    {
-	        if (comment != null) {
-	            command.setCacheHint(getQueryCacheOption(comment.image));
-	        }
-	        dbStore.setViewDefinition(table.getName(), command.toString(), true);        
-	    }
-	    [LOOKAHEAD(2) (alterOptionsList(objectName, Database.ResourceType.TABLE, dbStore) |
-	    	alterColumn(objectName, Database.ResourceType.TABLE, dbStore))
-	    ]
-	    | <RENAME> alterRenameTable(objectName, Database.ResourceType.TABLE, dbStore))
-	 ) | (
-	 	<TABLE> objectName = id(null)
-	 	{
-	 		if (virtual) {
-	            throw new org.teiid.metadata.MetadataException(QueryPlugin.Event.TEIID31238,
-	                    QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31238));                                    	 		
-	 		}
-	 	}
-	    [LOOKAHEAD(2) (alterOptionsList(objectName, Database.ResourceType.TABLE, dbStore) |	    	
-	    	alterAddColumn(objectName, Database.ResourceType.TABLE, dbStore) |
-	    	alterDropColumn(objectName, Database.ResourceType.TABLE, dbStore) |
-	    	alterColumn(objectName, Database.ResourceType.TABLE, dbStore) |
-	    	<RENAME> (alterRenameTable(objectName, Database.ResourceType.TABLE, dbStore) | 
-			alterRenameColumn(objectName, Database.ResourceType.TABLE, dbStore)))
-	    ]	 	
-	 ))    
+      ) |
+      alterOptionsList(objectName, Database.ResourceType.TABLE, dbStore) |         
+      alterAddColumn(objectName, Database.ResourceType.TABLE, dbStore) |
+      alterDropColumn(objectName, Database.ResourceType.TABLE, dbStore) |
+      (<ALTER> <COLUMN> alterColumn(objectName, Database.ResourceType.TABLE, Database.ResourceType.COLUMN, dbStore)) |
+      (<RENAME> (alterRenameTable(objectName, Database.ResourceType.TABLE, dbStore) | 
+                 (<COLUMN> alterRenameColumn(objectName, Database.ResourceType.TABLE, dbStore)))))
+         
 }
 
 /*
@@ -6226,16 +6239,12 @@ example=[source,sql]\n----\nALTER TABLE foo RENAME TO BAR;\n----\n
 */
 void alterRenameTable(String objectName, Database.ResourceType type, DatabaseStore dbStore) :
 {
-	MetadataFactory factory = null;
-	Table table = null;
 	String id = null;
 }
 { 
 	<TO> id = id(null)
 	{
-		factory = DatabaseStore.createMF(dbStore);
-		table = (Table)dbStore.getSchemaRecord(objectName, type);
-		dbStore.modifyTableName(table, id);
+		dbStore.modifyTableName(objectName, type, id);
 	}
 }
 
@@ -6254,12 +6263,9 @@ void alterAddColumn(String objectName, Database.ResourceType type, DatabaseStore
 	<ADD> <COLUMN>
 	{
 		factory = DatabaseStore.createMF(dbStore);
-		table = (Table)dbStore.getSchemaRecord(objectName, type); 
+		table = dbStore.getTableForCreateColumn(objectName, type);
 	}
 	createColumn(factory, table)
-	{
-		dbStore.tableModified(table);
-	}
 }
 
 /*
@@ -6278,15 +6284,7 @@ void alterDropColumn(String objectName, Database.ResourceType type, DatabaseStor
 	<DROP> <COLUMN>
 	childName = id(null)
 	{
-		factory = DatabaseStore.createMF(dbStore);
-		table = (Table)dbStore.getSchemaRecord(objectName, type);
-		column = table.getColumnByName(childName);
-		if (column == null) {
-			throw new org.teiid.metadata.MetadataException(QueryPlugin.Event.TEIID31223,
-            	QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31223, childName));		
-		}
-		table.removeColumn(column);
-		dbStore.tableModified(table); 
+		dbStore.removeColumn(objectName, type, childName);
 	}
 }
 
@@ -6295,22 +6293,16 @@ name=alter column options
 description=alters a set of column options
 example=[source,sql]\n----\nALTER COLUMN bar OPTIONS (ADD updatable true)\n----\n
 */
-void alterColumn(String objectName, Database.ResourceType type, DatabaseStore dbStore) :
+void alterColumn(String objectName, Database.ResourceType type, Database.ResourceType childType, DatabaseStore dbStore) :
 {
 	String childName = null;
-	Database.ResourceType childType = Database.ResourceType.COLUMN;
     ParsedDataType datatype = null;
     boolean autoIncrement = false;
     boolean notNull = false;
-    BaseColumn column = null;
-    Table table = null;
-    Procedure proc = null;
-    MetadataFactory factory = null;
 }
 { 
-	<ALTER> (<COLUMN>|<PARAMETER>{childType = Database.ResourceType.PARAMETER;})
 	childName = id(null)
-	(<TYPE>
+	((<TYPE>
      (
       <SERIAL>
       {
@@ -6326,30 +6318,9 @@ void alterColumn(String objectName, Database.ResourceType type, DatabaseStore db
       )
      )
      {
-        factory = DatabaseStore.createMF(dbStore);
-        if (childType == Database.ResourceType.COLUMN){
-            table = (Table)dbStore.getSchemaRecord(objectName, type); 
-            column = table.getColumnByName(childName);
-            if (column == null){
-                throw new ParseException(QueryPlugin.Util.getString("SQLParser.no_table_column_found", childName, table.getName())); //$NON-NLS-1$
-            }
-            ((Column)column).setAutoIncremented(autoIncrement);
-        } else {
-            proc = (Procedure)dbStore.getSchemaRecord(objectName, type);
-            column = proc.getParameterByName(childName);
-            if (column == null){
-                throw new ParseException(QueryPlugin.Util.getString("SQLParser.no_proc_column_found", childName, proc.getName())); //$NON-NLS-1$
-            }            
-        }
-        factory.setDataType(datatype.type, column, factory.getDataTypes(), notNull);
-        setTypeInfo(datatype, column);
-        if (notNull) {
-           column.setNullType(Column.NullType.No_Nulls);
-        }
-        if (childType == Database.ResourceType.COLUMN) {
-            ((Column)column).setAutoIncremented(autoIncrement);
-        }        
-     }	
+        dbStore.alterBaseColumn(objectName, type, childName, datatype, autoIncrement, notNull);
+     }
+    )	
 	|
 	alterChildOptionsList(objectName, type, childName, childType, dbStore))
 }
@@ -6363,34 +6334,13 @@ void alterRenameColumn(String objectName, Database.ResourceType type, DatabaseSt
 {
     String oldName = null;
     String newName = null;
-    Database.ResourceType childType = Database.ResourceType.COLUMN;
-    Table table = null;
-    BaseColumn column = null;
-    Procedure proc = null;
-    MetadataFactory factory = null;
 }
 { 
-    (<COLUMN>|<PARAMETER>{childType = Database.ResourceType.PARAMETER;})
     oldName = id(null)
     <TO>
     newName = id(null)
     {
-        factory = DatabaseStore.createMF(dbStore);
-        if (childType == Database.ResourceType.COLUMN){
-            table = (Table)dbStore.getSchemaRecord(objectName, type); 
-            column = table.getColumnByName(oldName);
-            if (column == null){
-                throw new ParseException(QueryPlugin.Util.getString("SQLParser.no_table_column_found", oldName, table.getName())); //$NON-NLS-1$
-            }
-            factory.renameColumn(oldName, newName, table);
-        } else {
-            proc = (Procedure)dbStore.getSchemaRecord(objectName, type);
-            column = proc.getParameterByName(oldName);
-            if (column == null){
-                throw new ParseException(QueryPlugin.Util.getString("SQLParser.no_proc_column_found", oldName, proc.getName())); //$NON-NLS-1$
-            }
-            column.setName(newName);            
-        } 
+        dbStore.renameBaseColumn(objectName, type, oldName, newName);
     }
 }
 
@@ -6399,31 +6349,27 @@ name=ALTER PROCEDURE
 description=alters options of database
 example=[source,sql]\n----\nALTER PROCEDURE foo [AS <stmt>] OPTIONS (ADD x y)\n----\n
 */
-void alterProcedure(DatabaseStore dbStore, boolean virtual, ParseInfo info) :
+void alterProcedure(DatabaseStore dbStore, ParseInfo info) :
 {
     String objectName = null;
     Statement stmt = null;
     Token comment = null;
-    Procedure procedure = null;
+    boolean virtual = true;
 }
 {
-    <PROCEDURE> objectName = id(null)
-    {
-    	procedure = (Procedure)dbStore.getSchemaRecord(objectName, Database.ResourceType.PROCEDURE);
-    }    
-    [
-        <AS> { comment = getToken(1).specialToken; } stmt = statement(info)
+    [<VIRTUAL>|<FOREIGN>{virtual=false;}] <PROCEDURE> objectName = id(null)
+    (( <AS> { comment = getToken(1).specialToken; } stmt = statement(info)
         {
             CreateProcedureCommand cup = new CreateProcedureCommand(asBlock(stmt));
             if (comment != null) {
                 cup.setCacheHint(getQueryCacheOption(comment.image));
             }
-            dbStore.setProcedureDefinition(procedure.getName(), cup.toString(), true);
+            dbStore.setProcedureDefinition(objectName, cup.toString());
         }
-    ]     
-    [LOOKAHEAD(2) (alterOptionsList(objectName, Database.ResourceType.PROCEDURE, dbStore) |   
-    	alterColumn(objectName, Database.ResourceType.PROCEDURE, dbStore)   |
-    	<RENAME> alterRenameColumn(objectName, Database.ResourceType.PROCEDURE, dbStore))]     
+    ) |     
+    alterOptionsList(objectName, Database.ResourceType.PROCEDURE, dbStore) |   
+    (<ALTER> <PARAMETER> alterColumn(objectName, Database.ResourceType.PROCEDURE, Database.ResourceType.PARAMETER, dbStore))   |
+    (<RENAME> <PARAMETER> alterRenameColumn(objectName, Database.ResourceType.PROCEDURE, dbStore)))     
 }
 
 /*
@@ -6443,7 +6389,7 @@ void alterTrigger(DatabaseStore dbStore, ParseInfo info) :
     (<AS> triggerAction = forEachRowTriggerAction(info) | <ENABLED> {enabled=true;} | <DISABLED> {enabled=false;})
     {
         if (enabled != null){
-            dbStore.enableTableTriggerPlan(objectName, Table.TriggerEvent.valueOf(event.image.toUpperCase()), enabled, true);
+            dbStore.enableTableTriggerPlan(objectName, Table.TriggerEvent.valueOf(event.image.toUpperCase()), enabled);
         } else {
             dbStore.setTableTriggerPlan(null, objectName, Table.TriggerEvent.valueOf(event.image.toUpperCase()), triggerAction.toString(), false);
         }                

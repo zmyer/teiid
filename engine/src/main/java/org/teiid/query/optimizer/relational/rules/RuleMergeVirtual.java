@@ -100,8 +100,17 @@ public final class RuleMergeVirtual implements
         List<PlanNode> sources = NodeEditor.findAllNodes(frame.getFirstChild(), NodeConstants.Types.SOURCE, NodeConstants.Types.SOURCE);
         
         SymbolMap references = (SymbolMap)frame.getProperty(NodeConstants.Info.CORRELATED_REFERENCES);
-        if (references != null && !sources.isEmpty()) {
-        	return root; //correlated nested table commands should not be merged
+        if (references != null) {
+            if (!sources.isEmpty()) {
+                return root; //correlated nested table commands should not be merged
+            }
+            
+            //this is ok only if all of the references go above the correlating join
+            //currently this check is simplistic - just look at the parent join more nested scenarios won't work
+            PlanNode parentJoin = NodeEditor.findParent(frame, NodeConstants.Types.JOIN, NodeConstants.Types.SOURCE | NodeConstants.Types.GROUP);
+            if (parentJoin != null && !parentJoin.getGroups().containsAll(GroupsUsedByElementsVisitor.getGroups(references.getValues()))) {
+                return root;
+            }
         }
 
         PlanNode parentProject = NodeEditor.findParent(frame, NodeConstants.Types.PROJECT);
@@ -196,7 +205,7 @@ public final class RuleMergeVirtual implements
         }
         
         //we don't have to check for null dependent with no source without criteria since there must be a row
-        if (!checkProjectedSymbols(projectNode, virtualGroup, parentJoin, metadata, sources, !sources.isEmpty() || frame.getParent() != parentJoin)) {
+        if (!checkProjectedSymbols(projectNode, virtualGroup, parentJoin, metadata, sources, !sources.isEmpty() || frame.getParent() != parentJoin, parentProject)) {
         	//TODO: propagate constants if just inhibited by subquery/non-deterministic expressions
             return root;
         }
@@ -212,10 +221,8 @@ public final class RuleMergeVirtual implements
         	RuleMergeCriteria.ReferenceReplacementVisitor rrv = new RuleMergeCriteria.ReferenceReplacementVisitor(references);
         	for (Map.Entry<ElementSymbol, Expression> entry : symbolMap.asUpdatableMap().entrySet()) {
         		if (entry.getValue() instanceof Reference) {
-        			Expression ex = references.getMappedExpression(((Reference)entry.getValue()).getExpression());
-        			if (ex != null) {
-        				entry.setValue(ex);
-        			}
+        			Expression ex = rrv.replaceExpression(entry.getValue());
+    				entry.setValue(ex);
         		} else {
         			PreOrPostOrderNavigator.doVisit(entry.getValue(), rrv, PreOrPostOrderNavigator.PRE_ORDER);
         		}
@@ -225,6 +232,10 @@ public final class RuleMergeVirtual implements
 
         PlanNode parentBottom = frame.getParent();
         prepareFrame(frame);
+        
+        if (projectNode.hasBooleanProperty(Info.HAS_WINDOW_FUNCTIONS)) {
+            parentProject.setProperty(Info.HAS_WINDOW_FUNCTIONS, true);
+        }
 
         if (sources.isEmpty() && parentJoin != null) {
         	//special handling for no sources
@@ -412,13 +423,18 @@ public final class RuleMergeVirtual implements
     
     /**
      * Check to ensure that we are not projecting a subquery or null dependent expressions
+     * @param parentProject2 
      */
     private static boolean checkProjectedSymbols(PlanNode projectNode,
                                                  GroupSymbol virtualGroup,
                                                  PlanNode parentJoin,
-                                                 QueryMetadataInterface metadata, List<PlanNode> sources, boolean checkForNullDependent) {
-        if (projectNode.hasBooleanProperty(Info.HAS_WINDOW_FUNCTIONS)) {
-        	return false;
+                                                 QueryMetadataInterface metadata, List<PlanNode> sources, boolean checkForNullDependent, PlanNode parentProject) {
+        if (projectNode.hasBooleanProperty(Info.HAS_WINDOW_FUNCTIONS)
+                && (parentProject.hasBooleanProperty(Info.HAS_WINDOW_FUNCTIONS) 
+                        || NodeEditor.findParent(projectNode, NodeConstants.Types.PROJECT, 
+                                NodeConstants.Types.SORT | NodeConstants.Types.GROUP | NodeConstants.Types.SELECT | NodeConstants.Types.JOIN) == null)) {
+            //if there something above using the window function symbols, then we can move the projection
+            return false;
         }
 
         List<Expression> selectSymbols = (List<Expression>)projectNode.getProperty(NodeConstants.Info.PROJECT_COLS);

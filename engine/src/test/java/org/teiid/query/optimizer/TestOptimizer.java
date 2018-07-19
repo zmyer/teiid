@@ -59,7 +59,6 @@ import org.teiid.query.processor.TestProcessor;
 import org.teiid.query.processor.relational.*;
 import org.teiid.query.processor.relational.SortUtility.Mode;
 import org.teiid.query.resolver.QueryResolver;
-import org.teiid.query.resolver.TestResolver;
 import org.teiid.query.rewriter.QueryRewriter;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.lang.Command;
@@ -166,7 +165,7 @@ public class TestOptimizer {
     public static ProcessorPlan helpPlan(String sql, QueryMetadataInterface md, List<String> bindings, CapabilitiesFinder capFinder, String[] expectedAtomic, boolean shouldSucceed) {
         Command command;
         try {
-            command = helpGetCommand(sql, md, bindings);
+            command = helpGetCommand(sql, md);
         } catch (TeiidException err) {
             throw new TeiidRuntimeException(err);
         }
@@ -175,21 +174,16 @@ public class TestOptimizer {
     } 
     
     public static ProcessorPlan helpPlan(String sql, QueryMetadataInterface md, List<String> bindings, CapabilitiesFinder capFinder, String[] expectedAtomic, ComparisonMode mode) throws TeiidComponentException, TeiidProcessingException {
-        Command command = helpGetCommand(sql, md, bindings);
+        Command command = helpGetCommand(sql, md);
 
         return helpPlanCommand(command, md, capFinder, null, expectedAtomic, mode);
     } 
 
     
-    public static Command helpGetCommand(String sql, QueryMetadataInterface md, List<String> bindings) throws TeiidComponentException, TeiidProcessingException { 
+    public static Command helpGetCommand(String sql, QueryMetadataInterface md) throws TeiidComponentException, TeiidProcessingException { 
 		if(DEBUG) System.out.println("\n####################################\n" + sql);	 //$NON-NLS-1$
-		Command command = null;
-		if (bindings != null && !bindings.isEmpty()) {
-			command = TestResolver.helpResolveWithBindings(sql, md, bindings);
-		} else {
- 			command = QueryParser.getQueryParser().parseCommand(sql);
-			QueryResolver.resolveCommand(command, md);
-		}
+		Command command = QueryParser.getQueryParser().parseCommand(sql);
+		QueryResolver.resolveCommand(command, md);
 		
         ValidatorReport repo = Validator.validate(command, md);
 
@@ -246,7 +240,7 @@ public class TestOptimizer {
             final String sql = expectedAtomic[i];
             Command command;
             try {
-                command = helpGetCommand(sql, md, null);
+                command = helpGetCommand(sql, md);
                 Collection<GroupSymbol> groups = GroupCollectorVisitor.getGroupsIgnoreInlineViews(command, false);
                 final GroupSymbol symbol = groups.iterator().next();
                 Object modelId = md.getModelID(symbol.getMetadataID());
@@ -1007,13 +1001,6 @@ public class TestOptimizer {
         helpPlan("select count(*) from vm1.u9", example1(), //$NON-NLS-1$
             new String[] { "SELECT 1 FROM pm1.g1", //$NON-NLS-1$
                             "SELECT 1 FROM pm1.g2" } );     //$NON-NLS-1$
-    }
-    
-    @Test public void testPushMatchCritWithReference() throws Exception {
-        List<String> bindings = new ArrayList<String>();
-        bindings.add("pm1.g2.e1"); //$NON-NLS-1$
-        helpPlan("select e1 FROM pm1.g1 WHERE e1 LIKE ?", example1(), bindings, null,  //$NON-NLS-1$
-            new String[] { "SELECT g_0.e1 FROM pm1.g1 AS g_0 WHERE g_0.e1 LIKE pm1.g2.e1" }, ComparisonMode.EXACT_COMMAND_STRING ); //$NON-NLS-1$
     }
     
     @Test public void testDefect6517() {
@@ -5265,7 +5252,7 @@ public class TestOptimizer {
         ProcessorPlan plan = helpPlan(sql,  
                                       metadata,
                                       null, capFinder,
-                                      new String[] {"SELECT g_3.IntKey FROM (BQT1.SmallA AS g_0 CROSS JOIN BQT1.SmallA AS g_1) CROSS JOIN (BQT1.MediumB AS g_2 LEFT OUTER JOIN BQT1.MediumA AS g_3 ON g_3.IntKey = g_2.IntKey)"},  //$NON-NLS-1$
+                                      new String[] {"SELECT g_2.IntKey FROM (BQT1.SmallA AS g_0 CROSS JOIN BQT1.SmallA AS g_1) CROSS JOIN (BQT1.MediumA AS g_2 LEFT OUTER JOIN BQT1.MediumB AS g_3 ON g_2.IntKey = g_3.IntKey)"},  //$NON-NLS-1$
                                       ComparisonMode.EXACT_COMMAND_STRING );
         
         checkNodeTypes(plan, FULL_PUSHDOWN);        
@@ -6614,13 +6601,13 @@ public class TestOptimizer {
 
 		QueryMetadataInterface metadata = RealMetadataFactory.fromDDL(ddl, "x", "phy");
 		
-		getPlan(helpGetCommand("select * from x", metadata, null), metadata, getGenericFinder(), null, false, null);		
+		getPlan(helpGetCommand("select * from x", metadata), metadata, getGenericFinder(), null, false, null);		
 	}
 	
 	@Test(expected=QueryPlannerException.class) public void testInvalidSource() throws Exception {
 		String sql = "select * from pm1.g1"; //$NON-NLS-1$
 		QueryMetadataInterface md = RealMetadataFactory.example1Cached();
-		QueryOptimizer.optimizePlan(helpGetCommand(sql, md, null), md, null,  new DefaultCapabilitiesFinder() {
+		QueryOptimizer.optimizePlan(helpGetCommand(sql, md), md, null,  new DefaultCapabilitiesFinder() {
         	@Override
         	public boolean isValid(String modelName) {
         		return false;
@@ -6655,6 +6642,24 @@ public class TestOptimizer {
 		bsc.setSourceProperty(Capability.REQUIRED_LIKE_ESCAPE, '\\');
 		TestOptimizer.helpPlan(sql, RealMetadataFactory.example1Cached(), new String[] {"SELECT g_0.e2 FROM pm1.g1 AS g_0 WHERE g_0.e1 LIKE '\\_a%b' ESCAPE '\\'"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING);
 	}
+	
+    @Test public void testTimestampAddRestriction() throws Exception {
+        String sql = "SELECT timestampadd(sql_tsi_second, 1, timestampvalue) from bqt1.smalla"; //$NON-NLS-1$
+
+        BasicSourceCapabilities bsc = getTypicalCapabilities();
+        bsc.setFunctionSupport(SourceSystemFunctions.TIMESTAMPADD, true);
+        bsc.setCapabilitySupport(Capability.ONLY_TIMESTAMPADD_LITERAL, true);
+        TestOptimizer.helpPlan(sql, RealMetadataFactory.exampleBQTCached(), new String[] {"SELECT timestampadd(sql_tsi_second, 1, g_0.TimestampValue) FROM BQT1.SmallA AS g_0"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING);
+        
+        sql = "SELECT timestampadd(sql_tsi_second, intkey, timestampvalue) from bqt1.smalla"; //$NON-NLS-1$
+
+        //TODO - when possible this should modify the match pattern to use the required escape
+        TestOptimizer.helpPlan(sql, RealMetadataFactory.exampleBQTCached(), new String[] {"SELECT g_0.IntKey, g_0.TimestampValue FROM BQT1.SmallA AS g_0"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING);
+        
+        bsc.setCapabilitySupport(Capability.ONLY_TIMESTAMPADD_LITERAL, false);
+        
+        TestOptimizer.helpPlan(sql, RealMetadataFactory.exampleBQTCached(), new String[] {"SELECT timestampadd(sql_tsi_second, g_0.IntKey, g_0.TimestampValue) FROM BQT1.SmallA AS g_0"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING);
+    }
 	
 	public static final boolean DEBUG = false;
 

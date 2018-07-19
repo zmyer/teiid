@@ -24,11 +24,13 @@ import java.util.*;
 import org.teiid.adminapi.impl.ModelMetaData;
 import org.teiid.adminapi.impl.ModelMetaData.Message.Severity;
 import org.teiid.adminapi.impl.VDBMetaData;
+import org.teiid.api.exception.query.QueryMetadataException;
 import org.teiid.api.exception.query.QueryParserException;
 import org.teiid.api.exception.query.QueryResolverException;
 import org.teiid.core.TeiidComponentException;
 import org.teiid.core.TeiidException;
 import org.teiid.core.types.DataTypeManager;
+import org.teiid.dqp.internal.process.MetaDataProcessor;
 import org.teiid.language.SQLConstants;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
@@ -49,17 +51,24 @@ import org.teiid.query.resolver.QueryResolver;
 import org.teiid.query.resolver.util.ResolverUtil;
 import org.teiid.query.resolver.util.ResolverVisitor;
 import org.teiid.query.sql.LanguageObject;
+import org.teiid.query.sql.LanguageVisitor;
 import org.teiid.query.sql.lang.CacheHint;
 import org.teiid.query.sql.lang.Command;
+import org.teiid.query.sql.lang.DynamicCommand;
 import org.teiid.query.sql.lang.Query;
 import org.teiid.query.sql.lang.QueryCommand;
 import org.teiid.query.sql.lang.SetQuery;
+import org.teiid.query.sql.lang.StoredProcedure;
 import org.teiid.query.sql.navigator.PreOrPostOrderNavigator;
+import org.teiid.query.sql.navigator.PreOrderNavigator;
+import org.teiid.query.sql.proc.Block;
+import org.teiid.query.sql.proc.CommandStatement;
 import org.teiid.query.sql.proc.CreateProcedureCommand;
 import org.teiid.query.sql.symbol.ElementSymbol;
 import org.teiid.query.sql.symbol.Expression;
 import org.teiid.query.sql.symbol.GroupSymbol;
 import org.teiid.query.sql.symbol.Symbol;
+import org.teiid.query.sql.util.SymbolMap;
 import org.teiid.query.sql.visitor.ElementCollectorVisitor;
 import org.teiid.query.sql.visitor.EvaluatableVisitor;
 import org.teiid.query.sql.visitor.GroupCollectorVisitor;
@@ -309,7 +318,13 @@ public class MetadataValidator {
                 ModelMetaData model = vdb.getModel(schema.getName());
                 
                 for (final Table t:schema.getTables().values()) {
-                    if (t.isVirtual() && t.isMaterialized() && t.getMaterializedTable() != null) {
+                    if (!t.isVirtual() || !t.isMaterialized()) {
+                        continue;
+                    }
+                    String pollingExpression = t.getProperty(MaterializationMetadataRepository.MATVIEW_POLLING_QUERY, false);
+                    pollingQueryValidation(vdb, report, metadataValidator, model, t, pollingExpression, MaterializationMetadataRepository.MATVIEW_POLLING_QUERY);
+                    
+                    if (t.getMaterializedTable() != null) {
                     	Table matTable = t.getMaterializedTable();
                         Table stageTable = t.getMaterializedStageTable();
                         
@@ -343,8 +358,15 @@ public class MetadataValidator {
                         String status = t.getProperty(MATVIEW_STATUS_TABLE, false);
                         String loadScript = t.getProperty(MATVIEW_LOAD_SCRIPT, false);
                         if (status == null) {
-                        	metadataValidator.log(report, model, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31154, t.getFullName()));
-                        	continue; 
+                            status = model.getPropertyValue(MATVIEW_STATUS_TABLE);
+                            if (status == null) {
+                                status = vdb.getPropertyValue(MATVIEW_STATUS_TABLE);
+                                if (status == null) {
+                                	metadataValidator.log(report, model, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31154, t.getFullName()));
+                                    continue; 
+                                }
+                            }
+                            t.setProperty(MATVIEW_STATUS_TABLE, status); //for scripts and other logic, this must be on the view
                         }
                         
                         if (matViewLoadNumberColumn == null && stageTable == null && loadScript == null) {
@@ -423,7 +445,7 @@ public class MetadataValidator {
                         loadScriptsValidation(vdb, report, metadataValidator, model, t, t.getProperty(MATVIEW_BEFORE_LOAD_SCRIPT, false), "MATVIEW_BEFORE_LOAD_SCRIPT");//$NON-NLS-1$
                         loadScriptsValidation(vdb, report, metadataValidator, model, t, t.getProperty(MATVIEW_LOAD_SCRIPT, false), "MATVIEW_LOAD_SCRIPT");//$NON-NLS-1$
                         loadScriptsValidation(vdb, report, metadataValidator, model, t, t.getProperty(MATVIEW_AFTER_LOAD_SCRIPT, false), "MATVIEW_AFTER_LOAD_SCRIPT");//$NON-NLS-1$
-                    } else if (t.isVirtual() && t.isMaterialized() && t.getMaterializedTable() == null) {
+                    } else {
                     	// internal materialization
                     	String manage = t.getProperty(ALLOW_MATVIEW_MANAGEMENT, false);
                     	if (!Boolean.valueOf(manage)) {
@@ -438,7 +460,7 @@ public class MetadataValidator {
                 } 
             }
         }
-        
+
         interface TableFilter {
             void accept(Table table);
         }
@@ -496,6 +518,26 @@ public class MetadataValidator {
                 metadataValidator.log(report, model, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31198, matView.getFullName(), option, script, e));
             } 
         }
+        
+        private void pollingQueryValidation(VDBMetaData vdb, ValidatorReport report, MetadataValidator metadataValidator, ModelMetaData model, Table matView, String query, String option) {
+            if(query == null) {
+                return;
+            }
+            QueryMetadataInterface metadata = vdb.getAttachment(QueryMetadataInterface.class);
+            QueryParser queryParser = QueryParser.getQueryParser();
+            try {
+                Command command = queryParser.parseCommand(query);
+                QueryResolver.resolveCommand(command, metadata);        
+                AbstractValidationVisitor visitor = new ValidationVisitor();
+                ValidatorReport subReport = Validator.validate(command, metadata, visitor);
+                metadataValidator.processReport(model, matView, report, subReport);
+                if (command.getResultSetColumns().size() != 1 || command.getResultSetColumns().get(0).getType() != DataTypeManager.DefaultDataClasses.TIMESTAMP) {
+                    throw new QueryResolverException("Expected 1 timestampe result column"); //$NON-NLS-1$
+                }
+            } catch (QueryParserException | QueryResolverException | TeiidComponentException e) {
+                metadataValidator.log(report, model, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31269, matView.getFullName(), option, query, e));
+            } 
+        }
 
 		private void verifyTableColumns(ModelMetaData model, ValidatorReport report,
 				MetadataValidator metadataValidator, Table view, Table matView, String ignoreColumnOnMatView) {
@@ -550,14 +592,20 @@ public class MetadataValidator {
     				QueryResolver.resolveCommand(command, metadata);
     				resolverReport =  Validator.validate(command, metadata);
     				if (!resolverReport.hasItems() && (t.getColumns() == null || t.getColumns().isEmpty())) {
-    					List<Expression> symbols = command.getProjectedSymbols();
+
+    				    List<Expression> symbols = command.getProjectedSymbols();
     					for (Expression column:symbols) {
     						try {
-								addColumn(Symbol.getShortName(column), column.getType(), t, mf);
+								addColumn(column, t, mf, metadata);
 							} catch (TranslatorException e) {
 								log(report, model, e.getMessage());
 							}
     					}
+    					
+                        if (command instanceof SetQuery) {
+                            MetaDataProcessor.updateMetadataAcrossBranches((SetQuery) command, t.getColumns(), metadata);
+                        }
+    					
 					}
     				
                     node = QueryResolver.resolveView(symbol, new QueryNode(selectTransformation), SQLConstants.Reserved.SELECT, metadata, true);
@@ -650,6 +698,31 @@ public class MetadataValidator {
 		        c.setIncomingObjects(columnValues);
                 determineDependencies(command, c, i, columnValues);
 		    }
+		} else if (p instanceof Procedure) {
+		    final Procedure proc = (Procedure) p;
+		    if (proc.getResultSet() == null) {
+		        return;
+		    }
+		    CreateProcedureCommand cpc = (CreateProcedureCommand)command;
+		    Block b = cpc.getBlock();
+		    PreOrderNavigator.doVisit(b, new LanguageVisitor() {
+		        public void visit(CommandStatement obj) {
+		            if (!obj.isReturnable() || obj.getCommand() instanceof DynamicCommand) {
+		                return;
+		            }
+		            for (int i = 0; i < proc.getResultSet().getColumns().size(); i++) {
+	                    Column c = proc.getResultSet().getColumns().get(i);
+	                    LinkedHashSet<AbstractMetadataRecord> columnValues = null;
+	                    if (c.getIncomingObjects() instanceof LinkedHashSet) {
+	                        columnValues = (LinkedHashSet<AbstractMetadataRecord>) c.getIncomingObjects();
+	                    } else {
+	                        columnValues = new LinkedHashSet<>();
+	                        c.setIncomingObjects(columnValues);
+	                    }
+	                    determineDependencies(obj.getCommand(), c, i, columnValues);
+	                }
+		        }
+            });
 		}
 	}
 
@@ -658,7 +731,7 @@ public class MetadataValidator {
         Collection<GroupSymbol> groups = GroupCollectorVisitor.getGroupsIgnoreInlineViews(lo, true);
         for (GroupSymbol group : groups) {
             Object mid = group.getMetadataID();
-            if (mid instanceof TempMetadataAdapter) {
+            if (mid instanceof TempMetadataID) {
                 mid = ((TempMetadataID)mid).getOriginalMetadataID();
             }
             if (mid instanceof AbstractMetadataRecord) {
@@ -678,7 +751,7 @@ public class MetadataValidator {
     }
 
     private static void determineDependencies(Command command, Column c, int index, LinkedHashSet<AbstractMetadataRecord> columnValues) {
-        if (command instanceof Query) {
+        if (command instanceof Query || command instanceof StoredProcedure) {
             Expression ex = command.getProjectedSymbols().get(index);
             collectDependencies(ex, columnValues);
         } else if (command instanceof SetQuery) {
@@ -740,12 +813,38 @@ public class MetadataValidator {
 		}
 	}
 
-	private Column addColumn(String name, Class<?> type, Table table, MetadataFactory mf) throws TranslatorException {
+	private Column addColumn(Expression toCopy, Table table, MetadataFactory mf, QueryMetadataInterface metadata) throws TranslatorException, QueryMetadataException, TeiidComponentException {
+	    String name = Symbol.getShortName(toCopy);
+	    Class<?> type = toCopy.getType();
 		if (type == null) {
 			throw new TranslatorException(QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31086, name, table.getFullName()));
 		}
 		Column column = mf.addColumn(name, DataTypeManager.getDataTypeName(type), table);
 		column.setUpdatable(table.supportsUpdate());
+		//determine the column metadata
+		toCopy = SymbolMap.getExpression(toCopy);
+		boolean metadataSet = false;
+		if (toCopy instanceof ElementSymbol) {
+		    Object mid = ((ElementSymbol) toCopy).getMetadataID();
+		    if (mid instanceof Column) {
+		        metadataSet = true;
+		        Column other = (Column)mid;
+		        column.setCaseSensitive(other.isCaseSensitive());
+		        column.setCharOctetLength(other.getCharOctetLength());
+		        column.setCurrency(other.isCurrency());
+		        column.setFixedLength(other.isFixedLength());
+		        column.setFormat(other.getFormat());
+		        column.setLength(other.getLength());
+		        column.setNullType(other.getNullType());
+		        column.setPrecision(other.getPrecision());
+		        column.setRadix(other.getRadix());
+		        column.setScale(other.getScale());
+		        column.setSigned(other.isSigned());
+		    }
+		} 
+		if (!metadataSet) {
+		    MetaDataProcessor.setColumnMetadata(column, toCopy, metadata);
+		}
 		return column;		
 	}
 
@@ -888,6 +987,29 @@ public class MetadataValidator {
 							if (uniqueKey == null && referenceTable.getPrimaryKey() != null && keyMatches(referenceColumns, referenceTable.getPrimaryKey())) {
 								uniqueKey = referenceTable.getPrimaryKey();
 							}
+							//correct the order if needed, for now we always want the fk cols in the same order as the unique key
+							if (uniqueKey != null && referenceColumns.size() > 1) {
+							    boolean correct = false;
+                                for (int i = 0; i < referenceColumns.size(); i++) {
+                                    String ref = referenceColumns.get(i);
+                                    String keyCol = uniqueKey.getColumns().get(i).getName();
+                                    if (!ref.equalsIgnoreCase(keyCol)) {
+                                        correct = true;
+                                    }
+                                }
+                                if (correct) {
+                                    Map<String, Integer> keyNames = new TreeMap<String, Integer>(String.CASE_INSENSITIVE_ORDER);
+                                    for (Column c: uniqueKey.getColumns()) {
+                                        keyNames.put(c.getName(), keyNames.size());
+                                    }
+                                    Map<Integer,Column> reorderedCols = new TreeMap<Integer,Column>();
+                                    for (int i = 0; i < referenceColumns.size(); i++) {
+                                        int keyIndex = keyNames.get(referenceColumns.get(i));
+                                        reorderedCols.put(keyIndex, fk.getColumns().get(i));
+                                    }
+                                    fk.setColumns(new ArrayList<Column>(reorderedCols.values()));
+                                }
+                            }
 						}
 						if (uniqueKey == null) {
 							metadataValidator.log(report, model, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31095, t.getFullName(), referenceTableName.substring(index+1), referenceSchemaName, referenceColumns));

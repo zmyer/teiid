@@ -56,8 +56,6 @@ public class JDBCURL {
 	            ExecutionProperties.SQL_OPTION_SHOWPLAN,
 	            ExecutionProperties.NOEXEC,
 	            ExecutionProperties.PROP_FETCH_SIZE,
-	            ExecutionProperties.PROP_XML_FORMAT,
-	            ExecutionProperties.PROP_XML_VALIDATION,
 	            LocalProfile.USE_CALLING_THREAD,
 	            ExecutionProperties.DISABLE_LOCAL_TRANSACTIONS,
 	            ExecutionProperties.JDBC4COLUMNNAMEANDLABELSEMANTICS}) {
@@ -78,13 +76,13 @@ public class JDBCURL {
     	        BaseDataSource.PASSWORD,
     	        LocalProfile.WAIT_FOR_LOAD,
     	        TeiidURL.CONNECTION.AUTO_FAILOVER,
-    	        TeiidURL.CONNECTION.DISCOVERY_STRATEGY,
     	        TeiidURL.CONNECTION.PASSTHROUGH_AUTHENTICATION,
     	        TeiidURL.CONNECTION.JAAS_NAME,
     	        TeiidURL.CONNECTION.KERBEROS_SERVICE_PRINCIPLE_NAME,
     	        TeiidURL.CONNECTION.ENCRYPT_REQUESTS,
     	        TeiidURL.CONNECTION.LOGIN_TIMEOUT,
     	        DatabaseMetaDataImpl.REPORT_AS_VIEWS,
+    	        DatabaseMetaDataImpl.NULL_SORT,
     	        ResultSetImpl.DISABLE_FETCH_SIZE));
     	props.addAll(EXECUTION_PROPERTIES.keySet());
     	Map<String, String> result = new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
@@ -257,14 +255,6 @@ public class JDBCURL {
     
     public String getFetchSize() {
         return properties.getProperty(ExecutionProperties.PROP_FETCH_SIZE);
-    }
-    
-    public String getXMLFormat() {
-        return properties.getProperty(ExecutionProperties.PROP_XML_FORMAT);
-    }
-    
-    public String getXMLValidation() {
-        return properties.getProperty(ExecutionProperties.PROP_XML_VALIDATION);
     }
     
     public String getTransparentFailover() {

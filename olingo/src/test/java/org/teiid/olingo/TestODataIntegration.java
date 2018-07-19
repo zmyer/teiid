@@ -54,7 +54,9 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.teiid.GeneratedKeys;
+import org.teiid.adminapi.Admin;
 import org.teiid.adminapi.Admin.SchemaObjectType;
+import org.teiid.adminapi.CacheStatistics;
 import org.teiid.adminapi.Model;
 import org.teiid.adminapi.impl.ModelMetaData;
 import org.teiid.core.TeiidRuntimeException;
@@ -95,6 +97,8 @@ import org.teiid.translator.ResultSetExecution;
 import org.teiid.translator.TranslatorException;
 import org.teiid.translator.UpdateExecution;
 import org.teiid.translator.loopback.LoopbackExecutionFactory;
+import org.teiid.transport.SocketConfiguration;
+import org.teiid.transport.WireProtocol;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
@@ -213,6 +217,11 @@ public class TestODataIntegration {
         teiid = new EmbeddedServer();
         EmbeddedConfiguration config = new EmbeddedConfiguration();
         config.setTransactionManager(new DummyBaseTransactionManager());
+        SocketConfiguration sc = new SocketConfiguration();
+        sc.setBindAddress("localhost");
+        sc.setPortNumber(31000);
+        sc.setProtocol(WireProtocol.teiid);
+        config.addTransport(sc);
         teiid.start(config);
         ef = new LoopbackExecutionFactory() {
         	@Override
@@ -318,6 +327,15 @@ public class TestODataIntegration {
         
         response = http.GET(baseURL + "/loopy/vm1/G1?$filter=true");
         assertEquals(200, response.getStatus());
+    }
+    
+    @Test
+    public void testFilterIsNotNull() throws Exception {
+        //should work, but does not due to https://issues.apache.org/jira/browse/OLINGO-1245
+        //ContentResponse response = http.GET(baseURL + "/loopy/vm1/G1?$filter=not(" + Encoder.encode("e1 eq null") +")");
+        
+        ContentResponse response = http.GET(baseURL + "/loopy/vm1/G1?$filter=" + Encoder.encode("e1 ne null"));
+        assertEquals(response.getContentAsString(), 200, response.getStatus());
     }
 
     @Test
@@ -1036,6 +1054,9 @@ public class TestODataIntegration {
             assertEquals(200, response.getStatus());
             assertEquals("{\"@odata.context\":\"$metadata#x\",\"value\":[{\"a\":\"xyz\",\"b\":123}]}", 
                     response.getContentAsString());
+            CacheStatistics stats = teiid.getAdmin().getCacheStats(Admin.Cache.QUERY_SERVICE_RESULT_SET_CACHE.name()).iterator().next();
+            //first query misses, second hits
+            assertEquals(50, stats.getHitRatio(), 0);
         } finally {
             localClient = null;
             teiid.undeployVDB("northwind");
@@ -2038,6 +2059,8 @@ public class TestODataIntegration {
             teiid.undeployVDB("northwind");
         }
     }
+    
+    static int ROW_COUNT = 1;
 
     static class ODataHardCodedExecutionFactory extends HardCodedExecutionFactory{
         @Override
@@ -2060,7 +2083,7 @@ public class TestODataIntegration {
                 elementSymbol.setType(colTypes[i]);
                 cols.add(elementSymbol);
             }
-            return (List)Arrays.asList(AutoGenDataService.createResults(cols, 1, false));
+            return (List)Arrays.asList(AutoGenDataService.createResults(cols, ROW_COUNT, false));
         }         
     }
     
@@ -2920,4 +2943,83 @@ public class TestODataIntegration {
             teiid.undeployVDB("northwind");
         }
     }
+    
+    @Test public void testReferentialConstraints() throws Exception {
+        try {
+            String ddl = "CREATE VIEW A(a_id integer PRIMARY KEY, a_value string) AS SELECT 1, 'a1' UNION ALL SELECT 2, 'a2';\n" + 
+                    "            CREATE VIEW B(b_id integer PRIMARY KEY, b_value string) AS SELECT 3, 'b1' UNION ALL SELECT 4, 'b2';\n" + 
+                    "            CREATE VIEW C(c_id integer PRIMARY KEY, a_ref integer, b_ref integer,\n" + 
+                    "            FOREIGN KEY (a_ref) REFERENCES A(a_id),\n" + 
+                    "            FOREIGN KEY (b_ref) REFERENCES B(b_id))\n" + 
+                    "            AS SELECT 5, 1, 3 UNION ALL SELECT 6, 2, 4;";
+            
+            ModelMetaData mmd = new ModelMetaData();
+            mmd.setName("vw");
+            mmd.addSourceMetadata("ddl", ddl);
+            mmd.setModelType(Model.Type.VIRTUAL);
+            teiid.deployVDB("northwind", mmd);
+            
+            Properties props = new Properties();
+            localClient = getClient(teiid.getDriver(), "northwind", props);
+            
+            ContentResponse response = http.GET(baseURL + "/northwind/vw/$metadata");
+            assertEquals(200, response.getStatus());
+            assertTrue(response.getContentAsString().contains("<NavigationProperty Name=\"FK1\" Type=\"vw.B\"><ReferentialConstraint Property=\"b_ref\" ReferencedProperty=\"b_id\"/>"));
+        } finally {
+            localClient = null;
+            teiid.undeployVDB("northwind");
+        }
+    }
+    
+    @Test public void testConcatNull() throws Exception {
+        try {
+            String ddl = "CREATE VIEW A(a_id integer PRIMARY KEY, a_value string, b_value string) AS SELECT 1, 'a', null";
+            
+            ModelMetaData mmd = new ModelMetaData();
+            mmd.setName("vw");
+            mmd.addSourceMetadata("ddl", ddl);
+            mmd.setModelType(Model.Type.VIRTUAL);
+            teiid.deployVDB("northwind", mmd);
+            
+            Properties props = new Properties();
+            localClient = getClient(teiid.getDriver(), "northwind", props);
+            
+            ContentResponse response = http.GET(baseURL + "/northwind/vw/A?$filter=concat(a_value,b_value)%20eq%20%27a%27");
+            assertEquals(200, response.getStatus());
+            assertEquals("{\"@odata.context\":\"$metadata#A\",\"value\":[]}", 
+                    response.getContentAsString());
+        } finally {
+            localClient = null;
+            teiid.undeployVDB("northwind");
+        }
+    }
+    
+    @Test public void testSubstring() throws Exception {
+        try {
+            String ddl = "CREATE VIEW A(a_id integer PRIMARY KEY, a_value string) AS SELECT 1, 'abc'";
+            
+            ModelMetaData mmd = new ModelMetaData();
+            mmd.setName("vw");
+            mmd.addSourceMetadata("ddl", ddl);
+            mmd.setModelType(Model.Type.VIRTUAL);
+            teiid.deployVDB("northwind", mmd);
+            
+            Properties props = new Properties();
+            localClient = getClient(teiid.getDriver(), "northwind", props);
+            
+            ContentResponse response = http.GET(baseURL + "/northwind/vw/A?$filter=substring(a_value,1)%20eq%20%27bc%27");
+            assertEquals(200, response.getStatus());
+            assertEquals("{\"@odata.context\":\"$metadata#A\",\"value\":[{\"a_id\":1,\"a_value\":\"abc\"}]}", 
+                    response.getContentAsString());
+            
+            response = http.GET(baseURL + "/northwind/vw/A?$filter=substring(a_value,0,1)%20eq%20%27a%27");
+            assertEquals(200, response.getStatus());
+            assertEquals("{\"@odata.context\":\"$metadata#A\",\"value\":[{\"a_id\":1,\"a_value\":\"abc\"}]}", 
+                    response.getContentAsString());
+        } finally {
+            localClient = null;
+            teiid.undeployVDB("northwind");
+        }
+    }
+    
 }

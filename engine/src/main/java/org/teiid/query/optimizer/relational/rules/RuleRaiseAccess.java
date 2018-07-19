@@ -32,6 +32,7 @@ import org.teiid.core.TeiidComponentException;
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.util.Assertion;
 import org.teiid.core.util.EquivalenceUtil;
+import org.teiid.dqp.internal.process.multisource.MultiSourceMetadataWrapper;
 import org.teiid.metadata.ForeignKey;
 import org.teiid.query.analysis.AnalysisRecord;
 import org.teiid.query.metadata.QueryMetadataInterface;
@@ -112,7 +113,9 @@ public final class RuleRaiseAccess implements OptimizerRule {
             }            
             case NodeConstants.Types.PROJECT:
             {         
-            	if (CapabilitiesUtil.supports(Capability.NO_PROJECTION, modelID, metadata, capFinder)) {
+                //if the source does not support projection and this is not an update we can't raise
+            	if (CapabilitiesUtil.supports(Capability.NO_PROJECTION, modelID, metadata, capFinder) 
+            	        && FrameUtil.getNonQueryCommand(accessNode) == null) {
             		return null;
             	}
             	
@@ -700,6 +703,7 @@ public final class RuleRaiseAccess implements OptimizerRule {
 
 		for (PlanNode childNode : children) {
 			boolean lateral = false;
+			boolean procedure = false;
 			if (considerLateral && childNode.getType() == NodeConstants.Types.SOURCE
 					&& childNode.getFirstChild() != null
 					&& childNode.getProperty(Info.CORRELATED_REFERENCES) != null) {
@@ -710,6 +714,7 @@ public final class RuleRaiseAccess implements OptimizerRule {
                 Command command = FrameUtil.getNonQueryCommand(childNode.getFirstChild());
                 
                 if (command instanceof StoredProcedure) {
+                    procedure = true;
                 	if (!CapabilitiesUtil.supports(Capability.QUERY_FROM_PROCEDURE_TABLE, modelID, metadata, capFinder)) {
                 		return null;
                 	}
@@ -893,9 +898,14 @@ public final class RuleRaiseAccess implements OptimizerRule {
 					return null;
 				}
 			}
-			if (lateral && (!CapabilitiesUtil.supports(Capability.QUERY_FROM_JOIN_LATERAL, modelID, metadata, capFinder) 
-					|| (crits != null && !crits.isEmpty() && !CapabilitiesUtil.supports(Capability.QUERY_FROM_JOIN_LATERAL_CONDITION, accessModelID, metadata, capFinder)))) {
-				return null;
+			if (lateral) {
+		        if ((!CapabilitiesUtil.supports(Capability.QUERY_FROM_JOIN_LATERAL, modelID, metadata, capFinder) 
+		                || (crits != null && !crits.isEmpty() && !CapabilitiesUtil.supports(Capability.QUERY_FROM_JOIN_LATERAL_CONDITION, accessModelID, metadata, capFinder)))) {
+		            return null;
+		        }
+		        if (!procedure && CapabilitiesUtil.supports(Capability.QUERY_ONLY_FROM_JOIN_LATERAL_PROCEDURE, accessModelID, metadata, capFinder)) {
+                    return null;
+		        }
 			}
 		} // end walking through join node's children
 
@@ -1202,8 +1212,7 @@ public final class RuleRaiseAccess implements OptimizerRule {
 		boolean partitioned = false;
 		for (Expression expression : project) {
 			Expression ex = SymbolMap.getExpression(expression);
-			if (ex.getType() == DataTypeManager.DefaultDataClasses.STRING 
-					&& isMultiSourceColumn(metadata, ex, node)) {
+			if (isMultiSourceColumn(metadata, ex, node)) {
 				partitioned = true;
 				break;
 			}
@@ -1224,7 +1233,8 @@ public final class RuleRaiseAccess implements OptimizerRule {
 			return false;
 		}
 		ElementSymbol es = (ElementSymbol) ex;
-		if (metadata.isMultiSourceElement(es.getMetadataID())) {
+		if (metadata.isMultiSourceElement(es.getMetadataID())
+		        || Boolean.valueOf(metadata.getExtensionProperty(es.getMetadataID(), MultiSourceMetadataWrapper.MULTISOURCE_PARTITIONED_PROPERTY, false))) {
 			return true;
 		}
 		if (node == null || node.getFirstChild() == null) {

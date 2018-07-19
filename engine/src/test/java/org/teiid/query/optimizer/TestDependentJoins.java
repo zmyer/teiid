@@ -659,10 +659,10 @@ public class TestDependentJoins {
     
         ProcessorPlan plan = TestOptimizer.helpPlan(sql, metadata,  
             null, capFinder,
-            new String[] { "SELECT g_0.e1 FROM pm1.g1 AS g_0", "SELECT g_0.e1 FROM pm1.g2 AS g_0 WHERE g_0.e1 IN (<dependent values>)", "SELECT g_0.e1 FROM pm1.g3 AS g_0" }, TestOptimizer.ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+            new String[] { "SELECT g_0.e1 FROM pm1.g1 AS g_0", "SELECT g_0.e1 FROM pm1.g2 AS g_0 WHERE g_0.e1 IN (<dependent values>)", "SELECT g_0.e1 FROM pm1.g3 AS g_0 WHERE g_0.e1 IN (<dependent values>)" }, TestOptimizer.ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         TestOptimizer.checkNodeTypes(plan, new int[] {
-            2,      // Access
-            1,      // DependentAccess
+            1,      // Access
+            2,      // DependentAccess
             0,      // DependentSelect
             0,      // DependentProject
             0,      // DupRemove
@@ -943,7 +943,7 @@ public class TestDependentJoins {
 
         QueryMetadataInterface metadata = RealMetadataFactory.example1();
         RealMetadataFactory.setCardinality("pm1.g1", RuleChooseDependent.DEFAULT_INDEPENDENT_CARDINALITY, metadata);
-        RealMetadataFactory.setCardinality("pm2.g2", RuleChooseDependent.DEFAULT_INDEPENDENT_CARDINALITY + 1, metadata);
+        RealMetadataFactory.setCardinality("pm2.g2", RuleChooseDependent.DEFAULT_INDEPENDENT_CARDINALITY + 1000, metadata);
         RealMetadataFactory.setCardinality("pm2.g3", RuleChooseDependent.DEFAULT_INDEPENDENT_CARDINALITY + 1, metadata);
     
         ProcessorPlan plan = TestOptimizer.helpPlan(sql, metadata,  
@@ -1064,6 +1064,13 @@ public class TestDependentJoins {
         node = node.getChildren()[0];
         assertTrue(node instanceof JoinNode);
         assertEquals(JoinType.JOIN_LEFT_OUTER, ((JoinNode)node).getJoinType());
+    }
+    
+    @Test public void testMakeDependentOverUnionProjectingLiterals() throws Exception {
+        ProcessorPlan plan = TestOptimizer.helpPlan("select pm1.g2.e1 from pm1.g2 inner join /*+ makedep */ "
+                + "(select 1 as x, 'a' as y, e1 from pm1.g1 union all select 2, 'b', e1 from pm2.g1) v on y = pm1.g2.e1 and x = pm1.g2.e2", RealMetadataFactory.example1Cached(), //$NON-NLS-1$
+            new String[] { "SELECT 2 FROM pm2.g1 AS g_0", "SELECT g_0.e1, g_0.e2 FROM pm1.g2 AS g_0", "SELECT 1 FROM pm1.g1 AS g_0" }, TestOptimizer.getGenericFinder(false), TestOptimizer.ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ //$NON-NLS-2$
+        checkDependentGroups(plan, new String[] {}); //$NON-NLS-1$
     }
     
 }

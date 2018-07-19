@@ -34,6 +34,7 @@ import org.teiid.translator.TranslatorProperty;
 import org.teiid.translator.TranslatorProperty.PropertyType;
 import org.teiid.translator.TypeFacility;
 import org.teiid.translator.WSConnection;
+import org.teiid.util.FullyQualifiedName;
 
 public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
     private static final String EDM_GEOMETRY = "Edm.Geometry"; //$NON-NLS-1$
@@ -107,12 +108,18 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
 
         // add entity sets as tables
         for (CsdlEntitySet entitySet : container.getEntitySets()) {
-            addTable(mf, entitySet.getName(), entitySet.getType(), ODataType.ENTITY_COLLECTION, metadata);
+            Table t = addTable(mf, entitySet.getName(), entitySet.getType(), ODataType.ENTITY_COLLECTION, metadata);
+            FullyQualifiedName fqn = new FullyQualifiedName("entity container", container.getName()==null?"default":container.getName()); //$NON-NLS-1$ //$NON-NLS-2$
+            fqn.append("entity set", entitySet.getName()); //$NON-NLS-1$
+            t.setProperty(FQN, fqn.toString());
         }
 
         // add singletons sets as tables
         for (CsdlSingleton singleton : container.getSingletons()) {
-            addTable(mf, singleton.getName(), singleton.getType(), ODataType.ENTITY_COLLECTION, metadata);
+            Table t = addTable(mf, singleton.getName(), singleton.getType(), ODataType.ENTITY_COLLECTION, metadata);
+            FullyQualifiedName fqn = new FullyQualifiedName("entity container", container.getName()==null?"default":container.getName()); //$NON-NLS-1$ //$NON-NLS-2$
+            fqn.append("singleton", singleton.getName()); //$NON-NLS-1$
+            t.setProperty(FQN, fqn.toString());
         }
 
         // build relationships among tables
@@ -277,6 +284,8 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
         
         String tableName = parentTable.getName()+NAME_SEPARATOR+parentProperty.getName();
         Table childTable = buildTable(mf, tableName);
+        String parent = parentTable.getProperty(FQN, false);
+        childTable.setProperty(FQN, parent + FullyQualifiedName.SEPARATOR + new FullyQualifiedName("complex property", parentProperty.getName()).toString()); //$NON-NLS-1$
         childTable.setProperty(NAME_IN_SCHEMA, parentProperty.getType()); // complex type
         childTable.setProperty(ODATA_TYPE, 
                 parentProperty.isCollection() ? 
@@ -296,7 +305,7 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
             col.setProperty(PSEUDO, String.valueOf(Boolean.TRUE));
         }
         mf.addPrimaryKey("PK0", getColumnNames(pkColumns), childTable);
-        mf.addForiegnKey("FK0", getColumnNames(pkColumns), getColumnNames(pk.getColumns()), parentTable.getFullName(),
+        mf.addForeignKey("FK0", getColumnNames(pkColumns), getColumnNames(pk.getColumns()), parentTable.getFullName(),
                 childTable);
         
         if (isComplexType(parentTable)) {
@@ -458,7 +467,9 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
                 }
             } else if (property.isContainsTarget()) {
                 // it is defined the set of rows are specific to this EntitySet
-                toTable = addNavigationAsTable(mf, metadata, fromTable, toTable, property);
+                toTable = addNavigationAsTable(mf, metadata, fromTable, property);
+                String parent = fromTable.getProperty(FQN, false);
+                toTable.setProperty(FQN, parent + FullyQualifiedName.SEPARATOR + new FullyQualifiedName("contained", property.getName()).toString()); //$NON-NLS-1$
             } else {
                 //cannot determine the target
                 //could also be an exception
@@ -467,7 +478,9 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
 
             // support for self-joins
             if (same(fromTable, toTable)) {
-                toTable = addNavigationAsTable(mf, metadata, fromTable, toTable, property);
+                toTable = addNavigationAsTable(mf, metadata, fromTable, property);
+                String parent = fromTable.getProperty(FQN, false);
+                toTable.setProperty(FQN, parent + FullyQualifiedName.SEPARATOR + new FullyQualifiedName().append("self join", property.getName()).toString()); //$NON-NLS-1$
             }
 
             List<String> columnNames = new ArrayList<String>();
@@ -475,24 +488,12 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
             if (property.getReferentialConstraints().isEmpty()) {
                 if (!isNavigationType(toTable) && !hasReverseNavigation(mf, metadata, container,
                         fromTable, property, binding, toTable)) {
-                    // implicit references
-                    KeyRecord pk = getPKorUnique(fromTable);
-                    if (pk != null) {
-                        boolean matches = true;
-                        
-                        for (Column c : pk.getColumns()) {
-                            referenceColumnNames.add(c.getName());
-                            if (toTable.getColumnByName(c.getName()) != null) {
-                                columnNames.add(c.getName());
-                            } else {
-                                matches = false;
-                                break;
-                            }
-                        }
-                        if (matches) {
-                            mf.addForiegnKey(join(fromTable.getName(), NAME_SEPARATOR, property.getName()), columnNames,
-                                    referenceColumnNames, fromTable.getFullName(), toTable);
-                        }
+                    if (property.isCollection()) {
+                        addImplicitFk(mf, fromTable, property, toTable,
+                                columnNames, referenceColumnNames);
+                    } else {
+                        addImplicitFk(mf, toTable, property, fromTable,
+                                columnNames, referenceColumnNames);
                     }
                 }
             } else if (!property.isCollection()) { //sanity check - it should not be a collection
@@ -500,8 +501,31 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
                     columnNames.add(constraint.getProperty());
                     referenceColumnNames.add(constraint.getReferencedProperty());
                 }
-                mf.addForiegnKey(join(fromTable.getName(), NAME_SEPARATOR, property.getName()), columnNames,
+                mf.addForeignKey(join(fromTable.getName(), NAME_SEPARATOR, property.getName()), columnNames,
                         referenceColumnNames, toTable.getFullName(), fromTable);
+            }
+        }
+    }
+
+    private void addImplicitFk(MetadataFactory mf, Table fromTable,
+            CsdlNavigationProperty property, Table toTable,
+            List<String> columnNames, List<String> referenceColumnNames) {
+        KeyRecord pk = getPKorUnique(fromTable);
+        if (pk != null) {
+            boolean matches = true;
+            
+            for (Column c : pk.getColumns()) {
+                referenceColumnNames.add(c.getName());
+                if (toTable.getColumnByName(c.getName()) != null) {
+                    columnNames.add(c.getName());
+                } else {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                mf.addForeignKey(join(fromTable.getName(), NAME_SEPARATOR, property.getName()), columnNames,
+                        referenceColumnNames, fromTable.getFullName(), toTable);
             }
         }
     }
@@ -541,10 +565,10 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
         return false;
     }
     
-    private Table addNavigationAsTable(MetadataFactory mf, XMLMetadata metadata, Table fromTable, Table toTable,
+    private Table addNavigationAsTable(MetadataFactory mf, XMLMetadata metadata, Table fromTable,
             CsdlNavigationProperty property) throws TranslatorException {
         String name = join(fromTable.getName(), NAME_SEPARATOR, property.getName());
-        toTable = addTable(mf, name, property.getType(), 
+        Table toTable = addTable(mf, name, property.getType(), 
                 property.isCollection()?ODataType.NAVIGATION_COLLECTION:ODataType.NAVIGATION, 
                 metadata);
         toTable.setNameInSource(property.getName());
@@ -557,7 +581,7 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
             column.setProperty(PSEUDO, String.valueOf(Boolean.TRUE));
             columnNames.add(columnName);
         }
-        mf.addForiegnKey("FK0", columnNames, getColumnNames(pk.getColumns()), fromTable.getFullName(), toTable);
+        mf.addForeignKey("FK0", columnNames, getColumnNames(pk.getColumns()), fromTable.getFullName(), toTable);
         return toTable;
     }
 

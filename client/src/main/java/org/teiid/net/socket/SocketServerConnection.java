@@ -63,7 +63,7 @@ public class SocketServerConnection implements ServerConnection {
 	
 	private static final int FAILOVER_PING_INTERVAL = 1000;
 	private SocketServerInstanceFactory connectionFactory;
-    private ServerDiscovery serverDiscovery;
+    private UrlServerDiscovery serverDiscovery;
     private static Logger log = Logger.getLogger("org.teiid.client.sockets"); //$NON-NLS-1$
 
 	private boolean secure;
@@ -81,7 +81,7 @@ public class SocketServerConnection implements ServerConnection {
     
 	public SocketServerConnection(
 			SocketServerInstanceFactory connectionFactory, boolean secure,
-			ServerDiscovery serverDiscovery, Properties connProps) throws CommunicationException, ConnectionException {
+			UrlServerDiscovery serverDiscovery, Properties connProps) throws CommunicationException, ConnectionException {
 		this.connectionFactory = connectionFactory;
 		this.serverDiscovery = serverDiscovery;
 		this.connProps = connProps;
@@ -127,7 +127,6 @@ public class SocketServerConnection implements ServerConnection {
 				if (this.logonResult == null) {
 			        try {
 			            logon(newLogon, logoff);
-						this.serverDiscovery.connectionSuccessful(hostInfo);
 			            if (discoverHosts) {
 				            List<HostInfo> updatedHosts = this.serverDiscovery.getKnownHosts(logonResult, this.serverInstance);
 				            if (updatedHosts.size() > 1 && new HashSet<HostInfo>(updatedHosts).size() > new HashSet<HostInfo>(hostCopy).size()) {
@@ -154,7 +153,6 @@ public class SocketServerConnection implements ServerConnection {
 			} catch (SingleInstanceCommunicationException e) { 
 				ex = e;
 			} 	
-			this.serverDiscovery.markInstanceAsBad(hostInfo);
 			if (knownHosts == 1) { //just a single host, use the exception
 				if (ex instanceof UnknownHostException) {
 					 throw new SingleInstanceCommunicationException(JDBCPlugin.Event.TEIID20019, ex, JDBCPlugin.Util.gs(JDBCPlugin.Event.TEIID20019, hostInfo.getHostName()));
@@ -193,17 +191,12 @@ public class SocketServerConnection implements ServerConnection {
 		}
 		
 		if (logoff) {
-			if ("07.03".compareTo(this.serverInstance.getServerVersion()) <= 0) { //$NON-NLS-1$
-				//just remove the current instance - the server has already logged off the current user
-				LogonResult old = this.logonResults.remove(this.serverInstance.getHostInfo());
-				this.connectionFactory.disconnected(this.serverInstance, old.getSessionToken());
-			}
+			LogonResult old = this.logonResults.remove(this.serverInstance.getHostInfo());
 			logoffAll();
 		}
 		
 		this.logonResult = newResult;
 		this.logonResults.put(instance.getHostInfo(), this.logonResult);
-		this.connectionFactory.connected(instance, this.logonResult.getSessionToken());
 	}
 	
 	public static void updateConnectionProperties(Properties connectionProperties, InetAddress addr, boolean setMac) {
@@ -310,7 +303,6 @@ public class SocketServerConnection implements ServerConnection {
 		logoffAll();
 		
 		this.closed = true;
-		this.serverDiscovery.shutdown();
 	}
 
 	private void logoffAll() {
@@ -338,10 +330,7 @@ public class SocketServerConnection implements ServerConnection {
 
 	private void disconnect() {
 		this.logonResults.remove(this.serverInstance.getHostInfo());
-		if (this.logonResult != null) {
-			this.connectionFactory.disconnected(this.serverInstance, this.logonResult.getSessionToken());
-			this.logonResult = null;
-		}
+		this.logonResult = null;
 	}
 	
 	private synchronized ResultsFuture<?> isOpen() throws CommunicationException, InvalidSessionException, TeiidComponentException {
@@ -381,19 +370,6 @@ public class SocketServerConnection implements ServerConnection {
 		} catch (ConnectionException e) {
 			 throw new CommunicationException(e);
 		}
-	}
-	
-	public void cleanUp() {
-		if (this.serverInstance != null && this.logonResult != null && "08.02".compareTo(this.serverInstance.getServerVersion()) <= 0) { //$NON-NLS-1$
-			ILogon newLogon = this.serverInstance.getService(ILogon.class);
-			try {
-				newLogon.assertIdentity(null);
-			} catch (InvalidSessionException e) {
-			} catch (TeiidComponentException e) {
-			} catch (CommunicationException e) {
-			}
-		}
-		closeServerInstance();
 	}
 	
 	public void setFailOver(boolean failOver) {

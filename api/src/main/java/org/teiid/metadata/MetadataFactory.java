@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.TreeMap;
+import java.util.function.Function;
 
 import org.teiid.CommandContext;
 import org.teiid.UserDefinedAggregate;
@@ -46,6 +47,8 @@ import org.teiid.metadata.BaseColumn.NullType;
 import org.teiid.metadata.Database.ResourceType;
 import org.teiid.metadata.FunctionMethod.PushDown;
 import org.teiid.metadata.ProcedureParameter.Type;
+import org.teiid.translator.TranslatorProperty;
+import org.teiid.translator.TranslatorProperty.PropertyType;
 import org.teiid.translator.TypeFacility;
 
 
@@ -65,6 +68,8 @@ public class MetadataFactory extends NamespaceContainer {
 	private boolean autoCorrectColumnNames = true;
     private boolean renameDuplicateColumns;
     private boolean renameDuplicateTables;
+    private boolean renameAllDuplicates;
+    private boolean importPushdownFunctions;
 	private String rawMetadata;
 	private Properties modelProperties;
 	private Schema schema = new Schema();
@@ -74,6 +79,12 @@ public class MetadataFactory extends NamespaceContainer {
 	private transient ModelMetaData model;
 	private transient Map<String, ? extends VDBResource> vdbResources;
 	private Map<String, Grant> grants;
+
+    private String nameFormat;
+    
+    public MetadataFactory() {
+        
+    }
 
 	public MetadataFactory(String vdbName, Object vdbVersion, Map<String, Datatype> runtimeTypes, ModelMetaData model) {
 		this(vdbName, vdbVersion, model.getName(), runtimeTypes, model.getProperties(), model.getSchemaText());
@@ -102,9 +113,7 @@ public class MetadataFactory extends NamespaceContainer {
 					this.schema.setProperty(resolvePropertyKey(this, (String) entry.getKey()), (String) entry.getValue());
 				}
 			}
-		    this.autoCorrectColumnNames = PropertiesUtils.getBooleanProperty(modelProperties, "importer.autoCorrectColumnNames", this.autoCorrectColumnNames); //$NON-NLS-1$
-		    this.renameDuplicateColumns = PropertiesUtils.getBooleanProperty(modelProperties, "importer.renameDuplicateColumns", this.renameDuplicateColumns); //$NON-NLS-1$
-		    this.renameDuplicateTables = PropertiesUtils.getBooleanProperty(modelProperties, "importer.renameDuplicateTables", this.renameDuplicateTables); //$NON-NLS-1$
+			PropertiesUtils.setBeanProperties(this, modelProperties, "importer"); //$NON-NLS-1$
 		}
 		this.modelProperties = modelProperties;
 		this.rawMetadata = rawMetadata;
@@ -179,21 +188,31 @@ public class MetadataFactory extends NamespaceContainer {
 	public Table addTable(String name) {
 		Table table = new Table();
 		table.setTableType(Table.Type.Table);
-		if (renameDuplicateTables && this.schema.getTable(name) != null) {
-		    int suffix = 1;
-            String newName = name + "_" + suffix; //$NON-NLS-1$
-            while (this.schema.getTable(newName) != null) {
-                suffix++;
-                newName = name + "_" + suffix; //$NON-NLS-1$
-            }
-            LogManager.logInfo(LogConstants.CTX_CONNECTOR, DataPlugin.Util.gs(DataPlugin.Event.TEIID60040, name, newName));
-            name = newName;
+		if (nameFormat != null) {
+		    name = String.format(nameFormat, name);
+		}
+		if (renameAllDuplicates || renameDuplicateTables) {
+		    name = checkForDuplicate(name, (s)->this.schema.getTable(s) != null, "Table"); //$NON-NLS-1$
 		}
 		table.setName(name);
 		setUUID(table);
 		this.schema.addTable(table);
 		return table;
 	}
+
+    private String checkForDuplicate(String name, Function<String, Boolean> check, String type) {
+        if (check.apply(name)) {
+		    int suffix = 1;
+            String newName = name + "_" + suffix; //$NON-NLS-1$
+            while (check.apply(newName)) {
+                suffix++;
+                newName = name + "_" + suffix; //$NON-NLS-1$
+            }
+            LogManager.logInfo(LogConstants.CTX_CONNECTOR, DataPlugin.Util.gs(DataPlugin.Event.TEIID60039, name, newName, type));
+            name = newName;
+		}
+        return name;
+    }
 
 	/**
 	 * Adds a column to the table with the given name and type.
@@ -213,18 +232,8 @@ public class MetadataFactory extends NamespaceContainer {
 		} else if (name.indexOf(AbstractMetadataRecord.NAME_DELIM_CHAR) != -1) {
 			throw new MetadataException(DataPlugin.Event.TEIID60008, DataPlugin.Util.gs(DataPlugin.Event.TEIID60008, table.getFullName(), name));
 		}
-		if (table.getColumnByName(name) != null) {
-		    if (!renameDuplicateColumns) {
-		        throw new DuplicateRecordException(DataPlugin.Event.TEIID60016, DataPlugin.Util.gs(DataPlugin.Event.TEIID60016, table.getFullName() + AbstractMetadataRecord.NAME_DELIM_CHAR + name));
-		    }
-		    int suffix = 1;
-		    String newName = name + "_" + suffix; //$NON-NLS-1$
-            while (table.getColumnByName(newName) != null) {
-		        suffix++;
-		        newName = name + "_" + suffix; //$NON-NLS-1$
-		    }
-            LogManager.logInfo(LogConstants.CTX_CONNECTOR, DataPlugin.Util.gs(DataPlugin.Event.TEIID60039, name, newName));
-            name = newName;
+		if (renameDuplicateColumns || renameAllDuplicates) {
+		    name = checkForDuplicate(name, (s)->table.getColumnByName(s) != null, "Column"); //$NON-NLS-1$
 		}
 		Column column = new Column();
 		column.setName(name);
@@ -246,11 +255,31 @@ public class MetadataFactory extends NamespaceContainer {
             throw new DuplicateRecordException(DataPlugin.Event.TEIID60016, DataPlugin.Util.gs(DataPlugin.Event.TEIID60016, table.getFullName() + AbstractMetadataRecord.NAME_DELIM_CHAR + name));
         }
         Column column = table.getColumnByName(oldName);
+        if (column == null) {
+            throw new MetadataException(DataPlugin.Event.TEIID60011, DataPlugin.Util.gs(DataPlugin.Event.TEIID60011, table.getFullName(), oldName));
+        }
         table.removeColumn(column);        
         column.setName(name);
         table.addColumn(column);
         return column;
-    }	
+    }
+    
+    public ProcedureParameter renameParameter(String oldName, String name, Procedure procedure) {
+        if (this.autoCorrectColumnNames) {
+            name = name.replace(AbstractMetadataRecord.NAME_DELIM_CHAR, '_');
+        } else if (name.indexOf(AbstractMetadataRecord.NAME_DELIM_CHAR) != -1) {
+            throw new MetadataException(DataPlugin.Event.TEIID60008, DataPlugin.Util.gs(DataPlugin.Event.TEIID60008, procedure.getFullName(), name));
+        }
+        if (procedure.getParameterByName(name) != null) {
+            throw new DuplicateRecordException(DataPlugin.Event.TEIID60016, DataPlugin.Util.gs(DataPlugin.Event.TEIID60016, procedure.getFullName() + AbstractMetadataRecord.NAME_DELIM_CHAR + name));
+        }
+        ProcedureParameter param = procedure.getParameterByName(oldName);
+        if (param == null) {
+            throw new MetadataException(DataPlugin.Event.TEIID60040, DataPlugin.Util.gs(DataPlugin.Event.TEIID60040, procedure.getFullName(), oldName));
+        }
+        param.setName(name);
+        return param;
+    }
 
 	public static Datatype setDataType(String type, BaseColumn column, Map<String, Datatype> dataTypes, boolean allowNull) {
 		int arrayDimensions = 0;
@@ -391,8 +420,13 @@ public class MetadataFactory extends NamespaceContainer {
 	 * @return
 	 * @throws MetadataException
 	 */
+	public ForeignKey addForeignKey(String name, List<String> columnNames, String referenceTable, Table table) {
+	    return addForeignKey(name, columnNames, null, referenceTable, table);
+	}
+	
+	@Deprecated
 	public ForeignKey addForiegnKey(String name, List<String> columnNames, String referenceTable, Table table) {
-		return addForiegnKey(name, columnNames, null, referenceTable, table);
+		return addForeignKey(name, columnNames, null, referenceTable, table);
 	}
 
 	/**
@@ -407,17 +441,22 @@ public class MetadataFactory extends NamespaceContainer {
 	 * @return
 	 * @throws MetadataException
 	 */
+	public ForeignKey addForeignKey(String name, List<String> columnNames, List<String> referencedColumnNames, String referenceTable, Table table) {
+	    ForeignKey foreignKey = new ForeignKey();
+        foreignKey.setParent(table);
+        foreignKey.setColumns(new ArrayList<Column>(columnNames.size()));
+        assignColumns(columnNames, table, foreignKey);
+        foreignKey.setReferenceTableName(referenceTable);
+        foreignKey.setReferenceColumns(referencedColumnNames);
+        foreignKey.setName(name);
+        setUUID(foreignKey);
+        table.getForeignKeys().add(foreignKey);
+        return foreignKey;
+	}
+	
+	@Deprecated
 	public ForeignKey addForiegnKey(String name, List<String> columnNames, List<String> referencedColumnNames, String referenceTable, Table table) {
-		ForeignKey foreignKey = new ForeignKey();
-		foreignKey.setParent(table);
-		foreignKey.setColumns(new ArrayList<Column>(columnNames.size()));
-		assignColumns(columnNames, table, foreignKey);
-		foreignKey.setReferenceTableName(referenceTable);
-		foreignKey.setReferenceColumns(referencedColumnNames);
-		foreignKey.setName(name);
-		setUUID(foreignKey);
-		table.getForeignKeys().add(foreignKey);
-		return foreignKey;
+	    return addForeignKey(name, columnNames, referencedColumnNames, referenceTable, table);
 	}
 
 	/**
@@ -429,6 +468,12 @@ public class MetadataFactory extends NamespaceContainer {
 	public Procedure addProcedure(String name) {
 	    Assertion.isNotNull(name, "name cannot be null"); //$NON-NLS-1$
 		Procedure procedure = new Procedure();
+		if (nameFormat != null) {
+            name = String.format(nameFormat, name);
+        }
+		if (renameAllDuplicates) {
+		    name = checkForDuplicate(name, (s)->this.schema.getProcedure(s) != null, "Procedure"); //$NON-NLS-1$   
+		}
 		procedure.setName(name);
 		setUUID(procedure);
 		procedure.setParameters(new LinkedList<ProcedureParameter>());
@@ -447,6 +492,9 @@ public class MetadataFactory extends NamespaceContainer {
 	 */
 	public ProcedureParameter addProcedureParameter(String name, String type, ProcedureParameter.Type parameterType, Procedure procedure) {
 		ProcedureParameter param = new ProcedureParameter();
+		if (renameAllDuplicates) {
+            name = checkForDuplicate(name, (s)->procedure.getParameterByName(s) != null, "Parameter"); //$NON-NLS-1$   
+        }
 		param.setName(name);
 		setUUID(param);
 		param.setType(parameterType);
@@ -844,5 +892,55 @@ public class MetadataFactory extends NamespaceContainer {
 		setUUID(functionMethod.getOutputParameter());
 		this.schema.addFunction(functionMethod);
 	}
+	
+	@TranslatorProperty (display="Auto-correct Column Names", category=PropertyType.IMPORT, description="If true replace the . character with _ in the Teiid column name, otherwise an exception will be raised.")
+	public boolean isAutoCorrectColumnNames() {
+        return autoCorrectColumnNames;
+    }
+	
+	@TranslatorProperty (display="Rename All Duplicate Names", category=PropertyType.IMPORT, description="Provide a unique Teiid name for all duplicate names (typically due to Teiid's case insensitivity).")
+	public boolean isRenameAllDuplicates() {
+        return renameAllDuplicates;
+    }
+	
+	@TranslatorProperty (display="Rename Duplicate Columns", category=PropertyType.IMPORT, description="Provide a unique Teiid name for duplicate column names (typically due to Teiid's case insensitivity).")
+	public boolean isRenameDuplicateColumns() {
+        return renameDuplicateColumns;
+    }
+	
+	@TranslatorProperty (display="Rename Duplicate Tables", category=PropertyType.IMPORT, description="Provide a unique Teiid name for duplicate table names (typically due to Teiid's case insensitivity).")
+	public boolean isRenameDuplicateTables() {
+        return renameDuplicateTables;
+    }
+	
+	public void setRenameAllDuplicates(boolean renameAllDuplicates) {
+        this.renameAllDuplicates = renameAllDuplicates;
+    }
+	
+	public void setRenameDuplicateColumns(boolean renameDuplicateColumns) {
+        this.renameDuplicateColumns = renameDuplicateColumns;
+    }
+	
+	public void setRenameDuplicateTables(boolean renameDuplicateTables) {
+        this.renameDuplicateTables = renameDuplicateTables;
+    }
+	
+	@TranslatorProperty (display="Name Format", category=PropertyType.IMPORT, description="The Java String Format to manipulate table and procedure names.")
+	public String getNameFormat() {
+        return nameFormat;
+    }
+	
+	public void setNameFormat(String nameFormat) {
+        this.nameFormat = nameFormat;
+    }
+	
+	@TranslatorProperty (display="Import Pushdown Functions", category=PropertyType.IMPORT, description="Expose translator pushdown functions on the source model, so that the functions are known to design environments.")
+	public boolean isImportPushdownFunctions() {
+        return importPushdownFunctions;
+    }
+	
+	public void setImportPushdownFunctions(boolean importPushdownFunctions) {
+        this.importPushdownFunctions = importPushdownFunctions;
+    }
 
 }

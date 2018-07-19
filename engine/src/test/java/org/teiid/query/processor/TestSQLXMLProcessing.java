@@ -316,6 +316,17 @@ public class TestSQLXMLProcessing {
         process(sql, expected);
     }
     
+    @Test public void testXmlTableWithPeriodAlias() throws Exception {
+        String sql = "select \"x.b\".* from xmltable('/a/b' passing convert('<a><b>first</b><b x=\"attr\">second</b></a>', xml) columns x string path '@x', val string path '/.') as \"x.b\""; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+                Arrays.asList(null, "first"),
+                Arrays.asList("attr", "second"),
+        };    
+    
+        process(sql, expected);
+    }
+    
     @Test(expected=QueryParserException.class) public void testXmlTableWithComplexIdentifier() throws Exception {
         String sql = "select * from xmltable('/a/b' passing convert('<a><b>first</b><b x=\"attr\">second</b></a>', xml) columns \"x.y\" string path '@x', val string path '/.') as x"; //$NON-NLS-1$
         
@@ -698,7 +709,7 @@ public class TestSQLXMLProcessing {
     	String sql = "select xmlforest(\"xml\") from (select 1 as \"xml\") x"; //$NON-NLS-1$
         
         List<?>[] expected = new List<?>[] {
-        		Arrays.asList("<_u0078_ml>1</_u0078_ml>")
+        		Arrays.asList("<_x0078_ml>1</_x0078_ml>")
         };    
     
         process(sql, expected);
@@ -891,6 +902,19 @@ public class TestSQLXMLProcessing {
 		processPreparedStatement(sql, expected, dataManager, new DefaultCapabilitiesFinder(), RealMetadataFactory.example1Cached(), Arrays.asList(b));
 	}
 	
+    @Test public void testLargeNumeric() throws Exception {
+        String sql = "select * from xmltable('/num' passing jsontoxml('num', '{\"a\":12345678901234567890, \"b\":12345678901234567890.0}') columns x string path 'a', y string path 'b') as x"; //$NON-NLS-1$
+
+        List<?>[] expected = new List<?>[] {
+                Arrays.asList("12345678901234567890", "12345678901234567890.0"),
+        };    
+    
+        Blob b = BlobType.createBlob(("{ \"firstName\": \"John\", \"lastName\": \"Smith\", \"age\": 25, \"address\": { \"streetAddress\": \"21 2nd Street\", \"city\": \"New York\", \"state\": \"NY\", "+
+        "\"postalCode\": \"10021\" }, \"phoneNumber\": [ { \"type\": \"home\", \"number\": \"212 555-1234\" }, { \"type\": \"fax\", \"number\": \"646 555-4567\" } ] }").getBytes(Charset.forName("UTF-8")));
+        
+        processPreparedStatement(sql, expected, dataManager, new DefaultCapabilitiesFinder(), RealMetadataFactory.example1Cached(), Arrays.asList(b));
+    }
+	
 	@Test public void testStaxComment() throws Exception {
 		String sql = "select * from xmltable('/*:Person/phoneNumber' passing cast(? as xml) columns x string path 'type', y string path 'number') as x"; //$NON-NLS-1$
 
@@ -898,7 +922,7 @@ public class TestSQLXMLProcessing {
         		Arrays.asList(null, "8881112222"),
         };    
     
-		XMLInputFactory factory = XMLInputFactory.newFactory();
+		XMLInputFactory factory = XMLInputFactory.newInstance();
 		XMLEventReader reader = factory.createXMLEventReader(new StringReader("<Person><!--hello--><phoneNumber><number>8881112222</number></phoneNumber></Person>"));
 		XMLType value = new XMLType(new StAXSQLXML(new StAXSource(reader)));
 		value.setType(Type.DOCUMENT);

@@ -107,7 +107,9 @@ import org.teiid.translator.SourceSystemFunctions;
  */
 public final class FunctionMethods {
 	
-	private static final class UpperLowerReader extends FilterReader {
+	private static final int ONE_BILLION = 1000000000;
+
+    private static final class UpperLowerReader extends FilterReader {
         int c1 = -1;
         private boolean upper;
 
@@ -178,7 +180,7 @@ public final class FunctionMethods {
         }
     }
 
-    private static final boolean CALENDAR_TIMESTAMPDIFF = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.calendarTimestampDiff", true); //$NON-NLS-1$
+    private static final boolean CALENDAR_TIMESTAMPDIFF = PropertiesUtils.getHierarchicalProperty("org.teiid.calendarTimestampDiff", true, Boolean.class); //$NON-NLS-1$
 
 	public static final String AT = "@"; //$NON-NLS-1$
 	
@@ -186,7 +188,12 @@ public final class FunctionMethods {
 
 	public static int plus(int x, int y) throws FunctionExecutionException {
 		long result = (long)x + y;
-		if (result > Integer.MAX_VALUE || result < Integer.MIN_VALUE) {
+		return integerRangeCheck(result);
+	}
+
+    public static int integerRangeCheck(long result)
+            throws FunctionExecutionException {
+        if (result > Integer.MAX_VALUE || result < Integer.MIN_VALUE) {
 			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, result));
 		}
 		return (int)result;
@@ -223,10 +230,7 @@ public final class FunctionMethods {
 
 	public static int minus(int x, int y) throws FunctionExecutionException {
 		long result = (long)x - y;
-		if (result > Integer.MAX_VALUE || result < Integer.MIN_VALUE) {
-			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, result));
-		}
-		return (int)result;
+		return integerRangeCheck(result);
 	}
 	
 	public static long minus(long x, long y) throws FunctionExecutionException {
@@ -260,10 +264,7 @@ public final class FunctionMethods {
 
 	public static int multiply(int x, int y) throws FunctionExecutionException {
 		long result = (long)x * y;
-		if (result > Integer.MAX_VALUE || result < Integer.MIN_VALUE) {
-			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, result));
-		}
-		return (int)result;
+		return integerRangeCheck(result);
 	}
 	
 	public static long multiply(long x, long y) throws FunctionExecutionException {
@@ -541,7 +542,7 @@ public final class FunctionMethods {
 	}
 	
 	private static Locale getSymbolLocale() {
-		return PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.enDateNames", false)?Locale.ENGLISH:Locale.getDefault(); //$NON-NLS-1$
+		return PropertiesUtils.getHierarchicalProperty("org.teiid.enDateNames", false, Boolean.class)?Locale.ENGLISH:Locale.getDefault(); //$NON-NLS-1$
 	}
 
 	static String[] getMonthNames() {
@@ -659,40 +660,47 @@ public final class FunctionMethods {
 	
 	//	================== Function = timestampadd =====================
 
-	public static Object timestampAdd(String intervalType, Integer count, Timestamp timestamp) {
-		Calendar cal = TimestampWithTimezone.getCalendar();
+    public static Object timestampAdd(String intervalType, int count, Timestamp timestamp) throws FunctionExecutionException {
+        return timestampAdd(intervalType, (long)count, timestamp);
+    }
+	
+	public static Object timestampAdd(String intervalType, long count, Timestamp timestamp) throws FunctionExecutionException {
+	    integerRangeCheck(count); //for compatibility with pushdown only allow int values
+	    
+	    Calendar cal = TimestampWithTimezone.getCalendar();
 
-		int nanos = timestamp.getNanos();
+		long nanos = timestamp.getNanos();
 		cal.setTime(timestamp);
 
 		// case of interval = 1, fractional seconds (nanos), don't go to branches of addField()
 		if (intervalType.equalsIgnoreCase(NonReserved.SQL_TSI_FRAC_SECOND)) {
-			int countValue = count.intValue();
-			nanos += countValue;
+			nanos = plus(nanos, count);
 
 			// Handle the case of nanos > 999,999,999 and increase the second.
-			// Since the count number is an interger, so the maximum is definite,
+			// Since the count number is an integer, so the maximum is definite,
 			// and nanos/999,999,999 can at most be added to second
-			if ( nanos > 999999999) {
-				int addSecond = nanos / 999999999;
-				int leftNanos = nanos % 999999999;
-				cal.add(Calendar.SECOND, addSecond);
-
-				Timestamp ts = new Timestamp(cal.getTime().getTime());
-				ts.setNanos(leftNanos);
-				return ts;
+			if (Math.abs(nanos) >= ONE_BILLION) {
+				long addSecond = nanos / ONE_BILLION;
+				nanos = (int)(nanos % ONE_BILLION);
+				
+				cal.add(Calendar.SECOND, integerRangeCheck(addSecond));
 			} 
-            // nanos <= 999,999,999
-			Timestamp ts = new Timestamp(cal.getTime().getTime());
-			ts.setNanos(nanos);
-			return ts;
+            
+			if (nanos < 0) {
+                cal.add(Calendar.SECOND, -1);
+                nanos = ONE_BILLION + nanos;
+            }
+
+            Timestamp ts = new Timestamp(cal.getTime().getTime());
+            ts.setNanos((int)nanos);
+            return ts;
 		}
         // for interval from 2 to 9
-		addField(intervalType, count, cal);
+		addField(intervalType, integerRangeCheck(count), cal);
 		Timestamp ts = new Timestamp(cal.getTime().getTime());
 
 		//rectify returned timestamp with original nanos
-		ts.setNanos(nanos);
+		ts.setNanos((int)nanos);
 		return ts;
 	}
 	
@@ -742,7 +750,7 @@ public final class FunctionMethods {
         	if (Math.abs(tsDiff) > Integer.MAX_VALUE) {
         		throw new FunctionExecutionException(QueryPlugin.Event.TEIID31144, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31144));
         	}
-            count = tsDiff * 1000000000 + ts2Obj.getNanos() - ts1Obj.getNanos();
+            count = tsDiff * ONE_BILLION + ts2Obj.getNanos() - ts1Obj.getNanos();
         } else { 
             if(intervalType.equalsIgnoreCase(NonReserved.SQL_TSI_SECOND)) {
                 count = tsDiff;
@@ -1547,6 +1555,15 @@ public final class FunctionMethods {
         return value;            
     }
     
+    public static Object sys_prop(String propertyName) {
+        return System.getProperty(propertyName);
+    }
+    
+    // ================= Function - ENV ========================
+    public static Object env_var(String propertyName) {
+        return System.getenv(propertyName);
+    }
+    
     public static Object session_id(CommandContext context) {
         return context.getConnectionId();
     }
@@ -1981,6 +1998,35 @@ public final class FunctionMethods {
             }
             return padding;
         }
+    }
+    
+    @TeiidFunction(category=FunctionCategoryConstants.DATETIME, pushdown=PushDown.CAN_PUSHDOWN)
+    public static Time current_time(CommandContext context, int precision) {
+        if (precision != 0) {
+            context.addWarning(new FunctionExecutionException(QueryPlugin.Event.TEIID31270, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31270, precision)));
+        }
+        return context.currentTime();
+    }
+    
+    @TeiidFunction(category=FunctionCategoryConstants.DATETIME, pushdown=PushDown.CAN_PUSHDOWN)
+    public static Timestamp current_timestamp(CommandContext context, int precision) {
+        if (precision > 9) {
+            context.addWarning(new FunctionExecutionException(QueryPlugin.Event.TEIID31271, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31271, precision)));
+            precision = 9;
+        }
+        if (precision == 9) {
+            return context.currentTimestamp();
+        }
+        Timestamp ts = context.currentTimestamp();
+        Timestamp clone = (Timestamp)ts.clone();
+        if (precision == 0) {
+            clone.setNanos(0);
+            return clone;
+        }
+        //reduce precision
+        int val = (int)Math.pow(10, 9 - precision);
+        clone.setNanos((clone.getNanos()/val)*val);
+        return clone;
     }
     
 }

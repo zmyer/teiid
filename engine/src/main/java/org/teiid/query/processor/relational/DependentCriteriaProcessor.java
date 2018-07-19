@@ -24,6 +24,7 @@ import org.teiid.api.exception.query.ExpressionEvaluationException;
 import org.teiid.common.buffer.BlockedException;
 import org.teiid.core.TeiidComponentException;
 import org.teiid.core.TeiidProcessingException;
+import org.teiid.core.types.DataTypeManager;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
 import org.teiid.query.QueryPlugin;
@@ -110,6 +111,9 @@ public class DependentCriteriaProcessor {
 			                List<Boolean> sortDirection = Collections.nCopies(sortSymbols.size(), OrderBy.ASC);
 			                this.sortUtility = new SortUtility(null, sortSymbols, sortDirection, Mode.DUP_REMOVE, dependentNode.getBufferManager(), dependentNode.getConnectionID(), originalVs.getSchema());
 			            	this.sortUtility.setWorkingBuffer(originalVs.getTupleBuffer());
+			            	//having this sort throw a blocked exception is a problem for 
+			            	//the logic that declines the source sort operation
+			            	this.sortUtility.setNonBlocking(true);
 		                }
 	            	}
 	            	if (sortUtility != null) {
@@ -441,7 +445,7 @@ public class DependentCriteriaProcessor {
 		                if (lessThanMax || isNull) {
 		                	for (SetState state : source) {
 		                        if (!isNull) {
-		                            Constant constant = newConstant(state.nextValue);
+		                            Constant constant = newConstant(state.nextValue, state.valueExpression);
 		                            if (state.existingSet == null || state.existingSet.getValues().contains(constant)) {
 		                                state.replacement.add(constant);
 		                            }
@@ -506,7 +510,13 @@ public class DependentCriteriaProcessor {
     		if (setSize == 1 || i + 1 == state.replacement.size()) {
 				orCrits.add(new CompareCriteria(crit.getExpression(), CompareCriteria.EQ, iter.next()));    				
 			} else {
-	    		List<Constant> vals = new ArrayList<Constant>(Math.min(state.replacement.size(), setSize));
+			    //use an appropriately searchable collection - which is expected by the temp table logic
+			    Collection<Constant> vals = null;
+			    if (!DataTypeManager.isHashable(crit.getExpression().getType())) {
+			        vals = new TreeSet<Constant>();
+			    } else {
+			        vals = new LinkedHashSet<Constant>();
+			    }
 				
 	    		for (int j = 0; j < setSize && iter.hasNext(); j++) {
 	    		    Constant val = iter.next();
@@ -516,6 +526,7 @@ public class DependentCriteriaProcessor {
 	            SetCriteria sc = new SetCriteria();
 	            sc.setExpression(crit.getExpression());
 	            sc.setValues(vals);
+	            sc.setAllConstants(true);
 	            orCrits.add(sc);
 			}
     	}
@@ -525,8 +536,13 @@ public class DependentCriteriaProcessor {
     	return new CompoundCriteria(CompoundCriteria.OR, orCrits);
     }
     
-    private Constant newConstant(Object val) {
-    	Constant c = new Constant(val);
+    private Constant newConstant(Object val, Expression ex) {
+        Constant c;
+        if (ex != null) {
+            c = new Constant(val, ex.getType());
+        } else {
+            c = new Constant(val);
+        }
     	if (useBindings) {
 	    	//TODO: validate that this is a reasonable approach
 	    	//we are using bind variables since that helps limit the size of the source sql

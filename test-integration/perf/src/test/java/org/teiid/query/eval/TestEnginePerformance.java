@@ -286,6 +286,7 @@ public class TestEnginePerformance {
 		cache.initialize();
 		bm.setCache(cache);
 		bm.initialize();
+		bm.setMaxBatchManagerSizeEstimate(Long.MAX_VALUE);
 		
 		es = Executors.newCachedThreadPool();
 	}
@@ -610,6 +611,7 @@ public class TestEnginePerformance {
 		System.out.println(bm.getWriteCount());
 		System.out.println(cache.getStorageReads());
 		System.out.println(cache.getStorageWrites());
+		System.out.println(cache.getMemoryInUseBytes());
 	}
 
 	/**
@@ -617,7 +619,7 @@ public class TestEnginePerformance {
 	 */
 	public static void main(String[] args) throws Exception {
 		FileOutputStream fos = new FileOutputStream(UnitTestUtil.getTestDataFile("test.xml"));
-		XMLOutputFactory xof = XMLOutputFactory.newFactory();
+		XMLOutputFactory xof = XMLOutputFactory.newInstance();
 		XMLStreamWriter xsw = xof.createXMLStreamWriter(fos);
 		xsw.writeStartDocument();
 		xsw.writeStartElement("root");
